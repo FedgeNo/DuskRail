@@ -39,3 +39,15 @@ foreach ($images as $image) {
 }
 
 echo 'Saved ' . count($images) . " images.\n";
+
+$anchorLinks = HTMLLoader::extractAnchorLinks($document, $baseURL);
+
+foreach ($anchorLinks as $link) {
+    // "unknown" rather than a guess like images get "image" - a href can
+    // point at absolutely anything (another page, a PDF, an image), and
+    // there's no equivalent to "found via <img>" telling us which.
+    $linkedItem = Item::findOrCreateByURL($link['url'], 'unknown', null, $link['description'] ?: null);
+    Link::create($item -> itemId, $linkedItem -> itemId, $link['description'] ?: null);
+}
+
+echo 'Saved ' . count($anchorLinks) . " anchor links.\n";
