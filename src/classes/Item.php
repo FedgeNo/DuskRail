@@ -124,4 +124,64 @@ UPDATE `Items`
         $this -> fullHTML = $fullHTML;
         $this -> crawledTime = $now;
     }
+
+    /**
+     * Removes this item outright - e.g. a redirect the crawler gave up on
+     * (too many hops, a broken Location) rather than leaving a permanently
+     * un-crawlable row sitting at crawledTime NULL, which nextToCrawl() would
+     * otherwise keep handing back forever on every single run.
+     */
+    public function delete(): void
+    {
+        $delete = mysqli_prepare(Database::connection(), '
+DELETE FROM `Items`
+    WHERE `itemId` = ?
+');
+        mysqli_stmt_bind_param($delete, 'i', $this -> itemId);
+        mysqli_stmt_execute($delete);
+    }
+
+    /**
+     * Repoints this item at a redirect target - the URL this item was
+     * fetched under was wrong (a 301/302/etc pointed somewhere else), and
+     * $newURL is what it should actually be. url is UNIQUE, so if some other
+     * item already owns that URL (found separately, e.g. via a link), the
+     * UPDATE fails with a duplicate-key error rather than succeeding: this
+     * row never had any content of its own (it's just the old address), so
+     * it's deleted and the caller gets back the item that already exists at
+     * $newURL instead - the two would otherwise represent the same resource
+     * under two different itemIds forever.
+     */
+    public function redirectTo(URL $newURL): self
+    {
+        $connection = Database::connection();
+        $newURLString = $newURL -> toString();
+
+        try {
+            $update = mysqli_prepare($connection, '
+UPDATE `Items`
+    SET `url` = ?
+    WHERE `itemId` = ?
+');
+            mysqli_stmt_bind_param($update, 'si', $newURLString, $this -> itemId);
+            mysqli_stmt_execute($update);
+
+            $this -> url = $newURLString;
+
+            return $this;
+        } catch (\mysqli_sql_exception $exception) {
+            $this -> delete();
+
+            $select = mysqli_prepare($connection, '
+SELECT *
+    FROM `Items`
+    WHERE `url` = ?
+    LIMIT 1
+');
+            mysqli_stmt_bind_param($select, 's', $newURLString);
+            mysqli_stmt_execute($select);
+
+            return self::fromRow(mysqli_fetch_assoc(mysqli_stmt_get_result($select)));
+        }
+    }
 }

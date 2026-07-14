@@ -17,8 +17,49 @@ if ($item === null) {
 
 echo 'Next up: ' . $item -> url . ' (itemId ' . $item -> itemId . ")\n";
 
+const REDIRECT_STATUS_CODES = [301, 302, 303, 307, 308];
+const MAX_REDIRECTS = 10;
+
 $pageURL = new URL($item -> url);
 $connection = new HTTPConnection($pageURL);
+
+for ($hop = 0; in_array($connection -> statusCode, REDIRECT_STATUS_CODES, true); $hop++) {
+    if ($hop >= MAX_REDIRECTS) {
+        $connection -> readBody();
+        $item -> delete();
+        echo "Too many redirects, deleted this item.\n";
+        exit(0);
+    }
+
+    $location = $connection -> headers['location'] ?? null;
+    $connection -> readBody(); // drain + close before opening the next hop's connection
+
+    if ($location === null) {
+        $item -> delete();
+        echo "Redirect status with no Location header, deleted this item.\n";
+        exit(0);
+    }
+
+    $redirectTarget = $pageURL -> resolve(new URL($location));
+
+    if (!$redirectTarget -> isValid()) {
+        $item -> delete();
+        echo "Redirect target isn't a real URL, deleted this item.\n";
+        exit(0);
+    }
+
+    $item = $item -> redirectTo($redirectTarget);
+    echo 'Redirected to: ' . $item -> url . ' (itemId ' . $item -> itemId . ")\n";
+
+    if ($item -> crawledTime !== null) {
+        echo "Redirect target already crawled, nothing more to do.\n";
+        exit(0);
+    }
+
+    $pageURL = new URL($item -> url);
+    $connection = new HTTPConnection($pageURL);
+}
+
 $contentType = $connection -> contentType();
 
 if ($contentType === null || !$contentType -> isHTML()) {
