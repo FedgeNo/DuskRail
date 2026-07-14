@@ -62,6 +62,20 @@ for ($hop = 0; in_array($connection -> statusCode, REDIRECT_STATUS_CODES, true);
 
 $contentType = $connection -> contentType();
 
+if ($contentType !== null && $contentType -> isImage()) {
+    $imageData = $connection -> readBody();
+    $image = ImageLoader::load($imageData, $item -> itemId);
+
+    // Keep whatever title/description/keywords this item already had (e.g.
+    // the parent-node text captured when it was first discovered as a link)
+    // rather than wiping them out - an image has no metadata of its own to
+    // extract that would replace them, real or otherwise.
+    $item -> markCrawled($contentType -> type, $item -> title, $item -> description, $item -> keywords, null, null);
+
+    echo $image !== null ? "Saved thumbnail, marked crawled.\n" : "Couldn't decode image, marked crawled anyway.\n";
+    exit(0);
+}
+
 if ($contentType === null || !$contentType -> isHTML()) {
     echo "Not HTML, nothing more to do yet.\n";
     exit(0);
