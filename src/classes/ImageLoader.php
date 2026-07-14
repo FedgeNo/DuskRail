@@ -54,15 +54,19 @@ class ImageLoader
         $thumbnailHeight = max(1, (int) round($height * $scale));
 
         $thumbnail = imagecreatetruecolor($thumbnailWidth, $thumbnailHeight);
-        imagealphablending($thumbnail, false);
-        imagesavealpha($thumbnail, true);
+
+        // JPEG has no alpha channel - flatten onto white first so a
+        // transparent source (a PNG logo, say) doesn't fall back to GD's
+        // default black canvas underneath it.
+        $white = imagecolorallocate($thumbnail, 255, 255, 255);
+        imagefill($thumbnail, 0, 0, $white);
         imagecopyresampled($thumbnail, $image, 0, 0, 0, 0, $thumbnailWidth, $thumbnailHeight, $width, $height);
 
         if (!is_dir(self::THUMBNAIL_DIRECTORY)) {
             mkdir(self::THUMBNAIL_DIRECTORY, 0755, true);
         }
 
-        imagepng($thumbnail, self::THUMBNAIL_DIRECTORY . '/' . $itemId . '.png');
+        imagejpeg($thumbnail, self::THUMBNAIL_DIRECTORY . '/' . $itemId . '.jpg', 85);
         imagedestroy($thumbnail);
     }
 }
