@@ -53,7 +53,16 @@
         // description/url is untrusted content from the open web and must
         // never be parsed as markup here.
         var titleLine = document.createElement('div');
-        titleLine.textContent = '[' + item.type + '] ' + (item.title || item.url);
+        titleLine.appendChild(document.createTextNode('[' + item.type + '] '));
+
+        var titleLink = document.createElement('a');
+        titleLink.href = item.url;
+        titleLink.target = '_blank';
+        titleLink.rel = 'noopener noreferrer';
+        titleLink.className = 'link-light';
+        titleLink.textContent = item.title || item.url;
+        titleLine.appendChild(titleLink);
+
         text.appendChild(titleLine);
 
         if (item.description) {
