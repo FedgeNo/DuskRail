@@ -11,6 +11,12 @@ define('CLASSES_DIR', SRC_DIR . '/classes');
 // process itself can't report back once it's been force-killed).
 define('CURRENT_CRAWL_ITEM_FILE', ROOT_DIR . '/crawler-current-item');
 
+// Optional focused-crawl topic, set from the watch.php control panel via
+// api/set-topic.php and read by bin/crawler.php at the start of each run -
+// the file is the only channel between the long-running web request that
+// sets it and the fresh CLI process that needs to see it next.
+define('CRAWL_TOPIC_FILE', ROOT_DIR . '/crawl-topic');
+
 error_reporting(E_ALL);
 ini_set('display_errors', '1');
 

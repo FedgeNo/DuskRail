@@ -8,7 +8,8 @@ if (PHP_SAPI !== 'cli') {
 
 require __DIR__ . '/../init.php';
 
-$item = Item::nextToCrawl();
+$topic = is_file(CRAWL_TOPIC_FILE) ? trim(file_get_contents(CRAWL_TOPIC_FILE)) : null;
+$item = Item::nextToCrawl($topic !== '' ? $topic : null);
 
 if ($item === null) {
     echo "Nothing to crawl.\n";

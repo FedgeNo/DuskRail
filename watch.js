@@ -3,6 +3,23 @@
     var feed = document.getElementById('feed');
     var UNDO_WINDOW_MS = 30000;
 
+    function setTopic(topic) {
+        fetch('/api/set-topic.php', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: 'topic=' + encodeURIComponent(topic)
+        }).catch(function () {});
+    }
+
+    document.getElementById('topic-set').addEventListener('click', function () {
+        setTopic(document.getElementById('topic-input').value);
+    });
+
+    document.getElementById('topic-clear').addEventListener('click', function () {
+        document.getElementById('topic-input').value = '';
+        setTopic('');
+    });
+
     function actuallyDelete(itemId, row) {
         fetch('/api/delete-item.php', {
             method: 'POST',
@@ -39,7 +56,7 @@
         titleLine.textContent = '[' + item.type + '] ' + (item.title || item.url);
         text.appendChild(titleLine);
 
-        if (item.title && item.description) {
+        if (item.description) {
             var descriptionLine = document.createElement('div');
             descriptionLine.className = 'text-muted small';
             descriptionLine.textContent = item.description;

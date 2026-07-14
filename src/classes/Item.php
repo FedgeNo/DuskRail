@@ -39,10 +39,40 @@ class Item
      * rows - NULL sorts first in MariaDB - come before anything already
      * crawled, and once everything's been crawled at least once this starts
      * naturally cycling back through the oldest recrawls first.
+     *
+     * $topic turns this into a focused crawl: among not-yet-crawled items,
+     * the one whose *discovery context* - the Links.description text of
+     * whichever page(s) linked to it - best matches $topic via FULLTEXT
+     * MATCH/AGAINST goes first, rather than whatever happened to be
+     * discovered earliest. An item can be linked from several parents with
+     * different link text, so this takes the best-scoring one (MAX), not an
+     * average - one strongly on-topic mention should outweigh several
+     * unrelated ones. Falls back to the default order for recrawls
+     * (everything already crawled once) or when nothing is left unqueued.
      */
-    public static function nextToCrawl(): ?self
+    public static function nextToCrawl(?string $topic = null): ?self
     {
         $connection = Database::connection();
+
+        if ($topic !== null && trim($topic) !== '') {
+            $focused = mysqli_prepare($connection, '
+SELECT `Items`.*
+    FROM `Items`
+    LEFT JOIN `Links` ON `Links`.`childId` = `Items`.`itemId`
+    WHERE `Items`.`crawledTime` IS NULL
+    GROUP BY `Items`.`itemId`
+    ORDER BY MAX(MATCH(`Links`.`description`) AGAINST (?)) DESC, `Items`.`itemId` ASC
+    LIMIT 1
+');
+            mysqli_stmt_bind_param($focused, 's', $topic);
+            mysqli_stmt_execute($focused);
+            $row = mysqli_fetch_assoc(mysqli_stmt_get_result($focused));
+
+            if ($row !== null) {
+                return self::fromRow($row);
+            }
+        }
+
         $result = mysqli_query($connection, '
 SELECT *
     FROM `Items`
