@@ -283,6 +283,28 @@ SHOW COLUMNS
     return $result !== false && mysqli_num_rows($result) > 0;
 }
 
+/**
+ * Unlike table_exists()/column_exists(), this is a real SELECT against
+ * information_schema (not a SHOW ... LIKE), so it can be a normal prepared
+ * statement with placeholders like everywhere else.
+ */
+function index_exists(string $table, string $indexName): bool
+{
+    $select = mysqli_prepare(Database::connection(), '
+SELECT 1
+    FROM `information_schema`.`STATISTICS`
+    WHERE `TABLE_SCHEMA` = DATABASE()
+        AND `TABLE_NAME` = ?
+        AND `INDEX_NAME` = ?
+    LIMIT 1
+');
+    mysqli_stmt_bind_param($select, 'ss', $table, $indexName);
+    mysqli_stmt_execute($select);
+    $result = mysqli_stmt_get_result($select);
+
+    return $result !== false && mysqli_num_rows($result) > 0;
+}
+
 function run_sql(string $sql): void
 {
     if (!mysqli_query(Database::connection(), $sql)) {
@@ -350,6 +372,16 @@ ALTER TABLE `Items`
                 run_sql('
 ALTER TABLE `Items`
     ADD COLUMN `inc` int(10) unsigned NOT NULL DEFAULT 1
+');
+            },
+        ],
+        [
+            'name' => 'add_fulltext_to_links_description',
+            'check' => fn () => index_exists('Links', 'description'),
+            'apply' => function (): void {
+                run_sql('
+ALTER TABLE `Links`
+    ADD FULLTEXT KEY `description` (`description`)
 ');
             },
         ],

@@ -27,6 +27,7 @@ CREATE TABLE `Links` (
   `description` varchar(255) DEFAULT NULL,
   PRIMARY KEY (`parentId`,`childId`),
   KEY `childId_parentId` (`childId`,`parentId`),
+  FULLTEXT KEY `description` (`description`),
   CONSTRAINT `Links_ibfk_1` FOREIGN KEY (`parentId`) REFERENCES `Items` (`itemId`) ON DELETE CASCADE,
   CONSTRAINT `Links_ibfk_2` FOREIGN KEY (`childId`) REFERENCES `Items` (`itemId`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
