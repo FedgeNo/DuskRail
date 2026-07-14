@@ -187,12 +187,16 @@ if ($connection !== false) {
     // directly - mysqli_prepare() returns false, "error near '?'") - real
     // escaping is the only option for this specific statement shape, unlike
     // every SELECT/INSERT/UPDATE elsewhere in this project.
-    $exists = mysqli_query($connection, "SHOW DATABASES LIKE '" . mysqli_real_escape_string($connection, $database_name) . "'");
+    $exists = mysqli_query($connection, '
+SHOW DATABASES LIKE \'' . mysqli_real_escape_string($connection, $database_name) . '\'
+');
 
     if ($exists !== false && mysqli_num_rows($exists) > 0) {
         ok('Database "' . $database_name . '" exists and credentials work');
     } else {
-        mysqli_query($connection, 'CREATE DATABASE `' . $database_name . '` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci');
+        mysqli_query($connection, '
+CREATE DATABASE `' . $database_name . '` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
+');
         ok('Created database "' . $database_name . '"');
     }
 
@@ -214,10 +218,21 @@ if ($connection !== false) {
     // or not) - mysqli_real_escape_string() on each value is the correct
     // substitute here, same as CREATE DATABASE/GRANT's backtick-quoted
     // identifier relies on validate_identifier() above instead of escaping.
-    mysqli_query($root_connection, 'CREATE DATABASE IF NOT EXISTS `' . $database_name . '` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci');
-    mysqli_query($root_connection, "CREATE USER IF NOT EXISTS '" . mysqli_real_escape_string($root_connection, $database_user) . "'@'" . mysqli_real_escape_string($root_connection, $config['host']) . "' IDENTIFIED BY '" . mysqli_real_escape_string($root_connection, $config['password']) . "'");
-    mysqli_query($root_connection, "GRANT ALL PRIVILEGES ON `" . $database_name . "`.* TO '" . mysqli_real_escape_string($root_connection, $database_user) . "'@'" . mysqli_real_escape_string($root_connection, $config['host']) . "'");
-    mysqli_query($root_connection, 'FLUSH PRIVILEGES');
+    mysqli_query($root_connection, '
+CREATE DATABASE IF NOT EXISTS `' . $database_name . '` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
+');
+
+    mysqli_query($root_connection, '
+CREATE USER IF NOT EXISTS \'' . mysqli_real_escape_string($root_connection, $database_user) . '\'@\'' . mysqli_real_escape_string($root_connection, $config['host']) . '\' IDENTIFIED BY \'' . mysqli_real_escape_string($root_connection, $config['password']) . '\'
+');
+
+    mysqli_query($root_connection, '
+GRANT ALL PRIVILEGES ON `' . $database_name . '`.* TO \'' . mysqli_real_escape_string($root_connection, $database_user) . '\'@\'' . mysqli_real_escape_string($root_connection, $config['host']) . '\'
+');
+
+    mysqli_query($root_connection, '
+FLUSH PRIVILEGES
+');
     mysqli_close($root_connection);
 
     ok('Created database "' . $database_name . '" and user "' . $database_user . '"');
@@ -239,7 +254,11 @@ if ($connection !== false) {
 function table_exists(string $table): bool
 {
     $connection = Database::connection();
-    $result = mysqli_query($connection, "SHOW TABLES LIKE '" . mysqli_real_escape_string($connection, $table) . "'");
+
+    $result = mysqli_query($connection, '
+SHOW TABLES
+    LIKE \'' . mysqli_real_escape_string($connection, $table) . '\'
+');
 
     return $result !== false && mysqli_num_rows($result) > 0;
 }
@@ -255,7 +274,11 @@ function column_exists(string $table, string $column): bool
     $table = validate_identifier($table, 'table name');
     $connection = Database::connection();
 
-    $result = mysqli_query($connection, 'SHOW COLUMNS FROM `' . $table . '` LIKE \'' . mysqli_real_escape_string($connection, $column) . '\'');
+    $result = mysqli_query($connection, '
+SHOW COLUMNS
+    FROM `' . $table . '`
+    LIKE \'' . mysqli_real_escape_string($connection, $column) . '\'
+');
 
     return $result !== false && mysqli_num_rows($result) > 0;
 }
@@ -303,21 +326,31 @@ CREATE TABLE `Links` (
             'name' => 'add_url_to_items',
             'check' => fn () => column_exists('Items', 'url'),
             'apply' => function (): void {
-                run_sql('ALTER TABLE `Items` ADD COLUMN `url` varchar(767) NOT NULL AFTER `itemId`, ADD UNIQUE KEY `url` (`url`)');
+                run_sql('
+ALTER TABLE `Items`
+    ADD COLUMN `url` varchar(767) NOT NULL AFTER `itemId`,
+    ADD UNIQUE KEY `url` (`url`)
+');
             },
         ],
         [
             'name' => 'add_crawledtime_to_items',
             'check' => fn () => column_exists('Items', 'crawledTime'),
             'apply' => function (): void {
-                run_sql('ALTER TABLE `Items` ADD COLUMN `crawledTime` int(10) unsigned DEFAULT NULL');
+                run_sql('
+ALTER TABLE `Items`
+    ADD COLUMN `crawledTime` int(10) unsigned DEFAULT NULL
+');
             },
         ],
         [
             'name' => 'add_inc_to_items',
             'check' => fn () => column_exists('Items', 'inc'),
             'apply' => function (): void {
-                run_sql('ALTER TABLE `Items` ADD COLUMN `inc` int(10) unsigned NOT NULL DEFAULT 1');
+                run_sql('
+ALTER TABLE `Items`
+    ADD COLUMN `inc` int(10) unsigned NOT NULL DEFAULT 1
+');
             },
         ],
     ];
@@ -339,7 +372,11 @@ CREATE TABLE IF NOT EXISTS `Migrations` (
 foreach (schema_deltas() as $delta) {
     $name = $delta['name'];
 
-    $recorded_stmt = mysqli_prepare($connection, 'SELECT 1 FROM `Migrations` WHERE `name` = ?');
+    $recorded_stmt = mysqli_prepare($connection, '
+SELECT 1
+    FROM `Migrations`
+    WHERE `name` = ?
+');
     mysqli_stmt_bind_param($recorded_stmt, 's', $name);
     mysqli_stmt_execute($recorded_stmt);
     $already_recorded = mysqli_stmt_get_result($recorded_stmt);
@@ -355,7 +392,10 @@ foreach (schema_deltas() as $delta) {
         ok('Applied delta "' . $name . '"');
     }
 
-    $insert_stmt = mysqli_prepare($connection, 'INSERT INTO `Migrations` (`name`) VALUES (?)');
+    $insert_stmt = mysqli_prepare($connection, '
+INSERT INTO `Migrations` (`name`)
+    VALUES (?)
+');
     mysqli_stmt_bind_param($insert_stmt, 's', $name);
 
     if (!mysqli_stmt_execute($insert_stmt)) {
