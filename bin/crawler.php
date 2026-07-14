@@ -66,13 +66,23 @@ if ($contentType !== null && $contentType -> isImage()) {
     $imageData = $connection -> readBody();
     $image = ImageLoader::load($imageData, $item -> itemId);
 
+    if ($image === null) {
+        // Content-Type claimed image/*, but imagecreatefromstring() couldn't
+        // actually decode it (an SVG, a corrupt file, a format GD doesn't
+        // support) - it isn't a usable image, so there's nothing to keep,
+        // same reasoning as deleting an unrecoverable redirect.
+        $item -> delete();
+        echo "Couldn't decode image, deleted this item.\n";
+        exit(0);
+    }
+
     // Keep whatever title/description/keywords this item already had (e.g.
     // the parent-node text captured when it was first discovered as a link)
     // rather than wiping them out - an image has no metadata of its own to
     // extract that would replace them, real or otherwise.
     $item -> markCrawled($contentType -> type, $item -> title, $item -> description, $item -> keywords, null, null);
 
-    echo $image !== null ? "Saved thumbnail, marked crawled.\n" : "Couldn't decode image, marked crawled anyway.\n";
+    echo "Saved thumbnail, marked crawled.\n";
     exit(0);
 }
 
