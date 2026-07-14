@@ -244,6 +244,13 @@ CREATE TABLE `Links` (
                 run_sql($c, 'ALTER TABLE `Items` ADD COLUMN `url` varchar(767) NOT NULL AFTER `itemId`, ADD UNIQUE KEY `url` (`url`)');
             },
         ],
+        [
+            'name' => 'add_crawledtime_to_items',
+            'check' => fn (\mysqli $c) => column_exists($c, 'Items', 'crawledTime'),
+            'apply' => function (\mysqli $c): void {
+                run_sql($c, 'ALTER TABLE `Items` ADD COLUMN `crawledTime` int(10) unsigned DEFAULT NULL');
+            },
+        ],
     ];
 }
 
