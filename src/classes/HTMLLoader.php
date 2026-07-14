@@ -51,4 +51,25 @@ class HTMLLoader
 
         return $document;
     }
+
+    /**
+     * The URL every other relative link on the page actually resolves
+     * against. Normally that's just the page's own URL, but a <base href>
+     * overrides it - and that href is itself often relative (e.g. "/en/"),
+     * so it has to be resolved against the page URL before it can be used to
+     * resolve anything else. Only the first <base> with a real href counts;
+     * later ones and hrefless <base target="...">-only tags are ignored.
+     */
+    public static function baseURL(\DOMDocument $document, URL $pageURL): URL
+    {
+        foreach ($document -> getElementsByTagName('base') as $base) {
+            $href = trim($base -> getAttribute('href'));
+
+            if ($base -> hasAttribute('href') && $href !== '') {
+                return $pageURL -> resolve(new URL($href));
+            }
+        }
+
+        return $pageURL;
+    }
 }
