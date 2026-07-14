@@ -51,3 +51,10 @@ foreach ($anchorLinks as $link) {
 }
 
 echo 'Saved ' . count($anchorLinks) . " anchor links.\n";
+
+$metadata = HTMLLoader::extractMetadata($document);
+$bodyText = HTMLLoader::extractBodyText($document);
+
+$item -> markCrawled($contentType -> type, $metadata['title'], $metadata['description'], $metadata['keywords'], $bodyText, $html);
+
+echo "Marked crawled.\n";

@@ -185,4 +185,153 @@ class HTMLLoader
 
         return $links;
     }
+
+    /**
+     * The page's title/description/keywords, preferring the plain old-school
+     * <title>/<meta name="description">/<meta name="keywords"> tags, falling
+     * back to Open Graph (og:title, og:description) then Twitter Card
+     * (twitter:title, twitter:description) meta tags, then finally to
+     * whatever a JSON-LD block declares - each source only fills in what the
+     * one before it left empty, rather than overriding it.
+     */
+    public static function extractMetadata(\DOMDocument $document): array
+    {
+        $title = $document -> getElementsByTagName('title') -> item(0)?->textContent;
+        $title = self::firstNonEmpty([$title, self::metaContent($document, 'property', 'og:title'), self::metaContent($document, 'name', 'twitter:title')]);
+
+        $description = self::firstNonEmpty([
+            self::metaContent($document, 'name', 'description'),
+            self::metaContent($document, 'property', 'og:description'),
+            self::metaContent($document, 'name', 'twitter:description'),
+        ]);
+
+        $keywords = self::metaContent($document, 'name', 'keywords');
+
+        foreach (self::jsonLDEntries($document) as $entry) {
+            $title ??= self::firstNonEmpty([self::stringValue($entry['headline'] ?? null), self::stringValue($entry['name'] ?? null)]);
+            $description ??= self::stringValue($entry['description'] ?? null);
+            $keywords ??= self::keywordsValue($entry['keywords'] ?? null);
+        }
+
+        return ['title' => $title, 'description' => $description, 'keywords' => $keywords];
+    }
+
+    /**
+     * All the plain visible text on the page, whitespace collapsed - real
+     * markup indents text nodes with newlines the browser doesn't render, so
+     * a raw textContent read is full of runs of whitespace that would only
+     * bloat what actually gets stored/searched. Runs after
+     * inlineImageAltText(), so img alt text rides along as part of this too.
+     */
+    public static function extractBodyText(\DOMDocument $document): string
+    {
+        $body = $document -> getElementsByTagName('body') -> item(0);
+
+        return trim(preg_replace('/\s+/', ' ', $body?->textContent ?? ''));
+    }
+
+    private static function metaContent(\DOMDocument $document, string $attribute, string $value): ?string
+    {
+        foreach ($document -> getElementsByTagName('meta') as $meta) {
+            if (strcasecmp($meta -> getAttribute($attribute), $value) === 0) {
+                $content = trim($meta -> getAttribute('content'));
+
+                if ($content !== '') {
+                    return $content;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    private static function firstNonEmpty(array $candidates): ?string
+    {
+        foreach ($candidates as $candidate) {
+            if (is_string($candidate) && trim($candidate) !== '') {
+                return trim($candidate);
+            }
+        }
+
+        return null;
+    }
+
+    private static function stringValue(mixed $value): ?string
+    {
+        return is_string($value) && trim($value) !== '' ? trim($value) : null;
+    }
+
+    /**
+     * JSON-LD's "keywords" is sometimes a comma-separated string, sometimes
+     * an array of strings - normalized to the same comma-separated string
+     * this project's own keywords column expects either way.
+     */
+    private static function keywordsValue(mixed $value): ?string
+    {
+        if (is_string($value)) {
+            return self::stringValue($value);
+        }
+
+        if (is_array($value)) {
+            $strings = array_filter($value, 'is_string');
+
+            return $strings !== [] ? implode(', ', $strings) : null;
+        }
+
+        return null;
+    }
+
+    /**
+     * Every JSON-LD block on the page, decoded - a top-level JSON array or an
+     * "@graph" wrapper each hold multiple separate entries, flattened here
+     * into one flat list either way.
+     */
+    private static function jsonLDEntries(\DOMDocument $document): array
+    {
+        $entries = [];
+
+        foreach ($document -> getElementsByTagName('script') as $script) {
+            if (strcasecmp($script -> getAttribute('type'), 'application/ld+json') !== 0) {
+                continue;
+            }
+
+            $decoded = self::decodeJSONLD($script -> textContent);
+
+            if ($decoded === null) {
+                continue;
+            }
+
+            if (array_is_list($decoded)) {
+                array_push($entries, ...array_filter($decoded, 'is_array'));
+            } elseif (isset($decoded['@graph']) && is_array($decoded['@graph'])) {
+                array_push($entries, ...array_filter($decoded['@graph'], 'is_array'));
+            } else {
+                $entries[] = $decoded;
+            }
+        }
+
+        return $entries;
+    }
+
+    /**
+     * Some sites run JSON-LD through the same HTML-escaping their templates
+     * apply to regular page text, which corrupts it - the quotes JSON itself
+     * needs end up as literal "&quot;" text instead of real " characters,
+     * since <script> content isn't supposed to be HTML-entity-decoded at all
+     * (it's raw text per the HTML spec) but got escaped as if it would be.
+     * The raw text is tried first so already-valid JSON-LD - the normal case
+     * - is never needlessly run through entity decoding at all.
+     */
+    private static function decodeJSONLD(string $json): ?array
+    {
+        $decoded = json_decode($json, true);
+
+        if (json_last_error() === JSON_ERROR_NONE && is_array($decoded)) {
+            return $decoded;
+        }
+
+        $decoded = json_decode(html_entity_decode($json, ENT_QUOTES | ENT_HTML5), true);
+
+        return json_last_error() === JSON_ERROR_NONE && is_array($decoded) ? $decoded : null;
+    }
 }

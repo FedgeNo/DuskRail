@@ -93,4 +93,35 @@ INSERT INTO `Items` (`url`, `type`, `title`, `description`)
 
         return $item;
     }
+
+    /**
+     * Records that this item has actually been fetched and processed - the
+     * real Content-Type (replacing whatever placeholder guess got it
+     * created, e.g. "image" or "unknown"), the extracted title/description/
+     * keywords/fullText/fullHTML, and crawledTime stamped to now. This is
+     * always the last step of crawling something: crawledTime is what
+     * nextToCrawl() orders by, so this is what actually moves the queue
+     * forward past this item.
+     */
+    public function markCrawled(string $type, ?string $title, ?string $description, ?string $keywords, ?string $fullText, ?string $fullHTML): void
+    {
+        $connection = Database::connection();
+        $now = time();
+
+        $update = mysqli_prepare($connection, '
+UPDATE `Items`
+    SET `type` = ?, `title` = ?, `description` = ?, `keywords` = ?, `fullText` = ?, `fullHTML` = ?, `crawledTime` = ?
+    WHERE `itemId` = ?
+');
+        mysqli_stmt_bind_param($update, 'ssssssii', $type, $title, $description, $keywords, $fullText, $fullHTML, $now, $this -> itemId);
+        mysqli_stmt_execute($update);
+
+        $this -> type = $type;
+        $this -> title = $title;
+        $this -> description = $description;
+        $this -> keywords = $keywords;
+        $this -> fullText = $fullText;
+        $this -> fullHTML = $fullHTML;
+        $this -> crawledTime = $now;
+    }
 }
