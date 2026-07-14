@@ -126,6 +126,12 @@ echo 'Saved ' . count($anchorLinks) . " anchor links.\n";
 $metadata = HTMLLoader::extractMetadata($document);
 $bodyText = HTMLLoader::extractBodyText($document);
 
-$item -> markCrawled($contentType -> type, $metadata['title'], $metadata['description'], $metadata['keywords'], $bodyText, $html);
+// Plenty of pages (CERN's own included) emit no description/OG/Twitter/
+// JSON-LD description at all - the first 500 chars of the page's own text
+// is a reasonable stand-in over leaving it null, both for display and for
+// FULLTEXT search relevance.
+$description = $metadata['description'] ?? mb_substr($bodyText, 0, 500);
+
+$item -> markCrawled($contentType -> type, $metadata['title'], $description, $metadata['keywords'], $bodyText, $html);
 
 echo "Marked crawled.\n";
