@@ -278,5 +278,37 @@ foreach (schema_deltas() as $delta) {
     run_sql($connection, "INSERT INTO `Migrations` (`name`) VALUES ('" . mysqli_real_escape_string($connection, $name) . "')");
 }
 
+// ---------- Web server ----------
+//
+// Apache vhost + SELinux/ACL setup can't be done by this script itself (it
+// needs root, and this script intentionally never asks for sudo). Printed
+// here as a record of the exact steps taken on the dev machine, and as
+// instructions for setting up a fresh box the same way.
+
+heading('Web server (run manually, needs sudo)');
+echo <<<'SHELL'
+sudo tee /etc/httpd/conf.d/duskrail.conf > /dev/null <<'EOF'
+<VirtualHost *:80>
+    ServerName duskrail.local
+    DocumentRoot /path/to/DuskRail
+
+    <Directory /path/to/DuskRail>
+        AllowOverride All
+        Require all granted
+    </Directory>
+
+    ErrorLog /var/log/httpd/duskrail-error.log
+    CustomLog /var/log/httpd/duskrail-access.log combined
+</VirtualHost>
+EOF
+echo "127.0.0.1 duskrail.local" | sudo tee -a /etc/hosts > /dev/null
+sudo setfacl -m u:apache:x /path/to
+sudo setsebool -P httpd_enable_homedirs on
+sudo semanage fcontext -a -t httpd_sys_content_t "/path/to/DuskRail(/.*)?"
+sudo restorecon -Rv /path/to/DuskRail
+sudo apachectl configtest && sudo systemctl reload httpd
+
+SHELL;
+
 heading('Done');
 echo "DuskRail is set up.\n";
