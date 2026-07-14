@@ -7,6 +7,7 @@
 
 CREATE TABLE `Items` (
   `itemId` int(10) unsigned NOT NULL AUTO_INCREMENT,
+  `url` varchar(767) NOT NULL,
   `type` varchar(50) NOT NULL,
   `title` varchar(255) DEFAULT NULL,
   `description` text DEFAULT NULL,
@@ -14,6 +15,7 @@ CREATE TABLE `Items` (
   `fullText` longtext DEFAULT NULL,
   `fullHTML` longtext DEFAULT NULL,
   PRIMARY KEY (`itemId`),
+  UNIQUE KEY `url` (`url`),
   FULLTEXT KEY `title_description_keywords_fullText` (`title`,`description`,`keywords`,`fullText`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
