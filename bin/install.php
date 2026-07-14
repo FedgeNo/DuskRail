@@ -78,6 +78,23 @@ function prompt(string $question, string $default): string
     return $answer === '' ? $default : $answer;
 }
 
+/**
+ * MySQL/MariaDB never allows a placeholder (?) in place of an identifier
+ * (a database/table/column/user name) - only for actual values - so a
+ * database or username that has to be backtick-interpolated into DDL/DCL
+ * (CREATE DATABASE, CREATE USER, GRANT, ...) can't go through a prepared
+ * statement at all. This is the defense-in-depth substitute: refuse
+ * anything that isn't a plain identifier before it ever reaches SQL.
+ */
+function validate_identifier(string $value, string $label): string
+{
+    if (preg_match('/^[A-Za-z0-9_]{1,64}$/', $value) !== 1) {
+        fail($label . ' "' . $value . '" may only contain letters, numbers, and underscores (max 64 chars).');
+    }
+
+    return $value;
+}
+
 // ---------- Requirements ----------
 
 heading('Checking requirements');
@@ -148,6 +165,13 @@ heading('Checking database');
 
 $config = require ROOT_DIR . '/src/config.php';
 
+// A database/user name gets backtick-interpolated into DDL below (MySQL
+// never accepts a placeholder for an identifier) - validated up front so
+// that interpolation is safe rather than trusting .env not to contain
+// anything stranger than a plain name.
+$database_name = validate_identifier($config['database'], 'DB_DATABASE');
+$database_user = validate_identifier($config['username'], 'DB_USERNAME');
+
 mysqli_report(MYSQLI_REPORT_OFF);
 
 $connection = mysqli_connect(
@@ -159,18 +183,22 @@ $connection = mysqli_connect(
 );
 
 if ($connection !== false) {
-    $exists = mysqli_query($connection, "SHOW DATABASES LIKE '" . mysqli_real_escape_string($connection, $config['database']) . "'");
+    // SHOW ... LIKE ? refuses to prepare at all on MariaDB/MySQL (confirmed
+    // directly - mysqli_prepare() returns false, "error near '?'") - real
+    // escaping is the only option for this specific statement shape, unlike
+    // every SELECT/INSERT/UPDATE elsewhere in this project.
+    $exists = mysqli_query($connection, "SHOW DATABASES LIKE '" . mysqli_real_escape_string($connection, $database_name) . "'");
 
     if ($exists !== false && mysqli_num_rows($exists) > 0) {
-        ok('Database "' . $config['database'] . '" exists and credentials work');
+        ok('Database "' . $database_name . '" exists and credentials work');
     } else {
-        mysqli_query($connection, 'CREATE DATABASE `' . $config['database'] . '` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci');
-        ok('Created database "' . $config['database'] . '"');
+        mysqli_query($connection, 'CREATE DATABASE `' . $database_name . '` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci');
+        ok('Created database "' . $database_name . '"');
     }
 
     mysqli_close($connection);
 } else {
-    warn('Could not connect as "' . $config['username'] . '" - the database/user may not exist yet.');
+    warn('Could not connect as "' . $database_user . '" - the database/user may not exist yet.');
 
     $root_user = prompt('MariaDB root (or admin) username to create it', 'root');
     $root_pass = prompt('MariaDB root (or admin) password', '');
@@ -181,13 +209,18 @@ if ($connection !== false) {
         fail('Could not connect as "' . $root_user . '" either. Create the database/user manually and re-run this script.');
     }
 
-    mysqli_query($root_connection, 'CREATE DATABASE IF NOT EXISTS `' . $config['database'] . '` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci');
-    mysqli_query($root_connection, "CREATE USER IF NOT EXISTS '" . mysqli_real_escape_string($root_connection, $config['username']) . "'@'" . mysqli_real_escape_string($root_connection, $config['host']) . "' IDENTIFIED BY '" . mysqli_real_escape_string($root_connection, $config['password']) . "'");
-    mysqli_query($root_connection, "GRANT ALL PRIVILEGES ON `" . $config['database'] . "`.* TO '" . mysqli_real_escape_string($root_connection, $config['username']) . "'@'" . mysqli_real_escape_string($root_connection, $config['host']) . "'");
+    // CREATE USER/GRANT can't be prepared statements either (MySQL's
+    // prepared-statement protocol doesn't support them at all, placeholders
+    // or not) - mysqli_real_escape_string() on each value is the correct
+    // substitute here, same as CREATE DATABASE/GRANT's backtick-quoted
+    // identifier relies on validate_identifier() above instead of escaping.
+    mysqli_query($root_connection, 'CREATE DATABASE IF NOT EXISTS `' . $database_name . '` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci');
+    mysqli_query($root_connection, "CREATE USER IF NOT EXISTS '" . mysqli_real_escape_string($root_connection, $database_user) . "'@'" . mysqli_real_escape_string($root_connection, $config['host']) . "' IDENTIFIED BY '" . mysqli_real_escape_string($root_connection, $config['password']) . "'");
+    mysqli_query($root_connection, "GRANT ALL PRIVILEGES ON `" . $database_name . "`.* TO '" . mysqli_real_escape_string($root_connection, $database_user) . "'@'" . mysqli_real_escape_string($root_connection, $config['host']) . "'");
     mysqli_query($root_connection, 'FLUSH PRIVILEGES');
     mysqli_close($root_connection);
 
-    ok('Created database "' . $config['database'] . '" and user "' . $config['username'] . '"');
+    ok('Created database "' . $database_name . '" and user "' . $database_user . '"');
 }
 
 // ---------- Schema ----------
@@ -197,24 +230,40 @@ if ($connection !== false) {
 // `apply` (the SQL to run if not). `check` lets this stay idempotent and
 // self-healing even if a delta was applied by hand outside this script.
 
-function table_exists(\mysqli $connection, string $table): bool
+// SHOW ... LIKE ? refuses to prepare at all on MariaDB/MySQL (confirmed
+// directly - mysqli_prepare() returns false, "error near '?'"), unlike every
+// SELECT/INSERT/UPDATE elsewhere in this project - real escaping via
+// mysqli_real_escape_string() is the only option for this specific
+// statement shape.
+
+function table_exists(string $table): bool
 {
+    $connection = Database::connection();
     $result = mysqli_query($connection, "SHOW TABLES LIKE '" . mysqli_real_escape_string($connection, $table) . "'");
 
     return $result !== false && mysqli_num_rows($result) > 0;
 }
 
-function column_exists(\mysqli $connection, string $table, string $column): bool
+function column_exists(string $table, string $column): bool
 {
+    // FROM `table` is a backtick-quoted identifier, not a value - it can't be
+    // a placeholder either way, so it's validated instead (this function is
+    // only ever called with the table names literally written in
+    // schema_deltas() below, never anything from outside this script, but
+    // validating costs nothing and keeps the same discipline as everywhere
+    // else here).
+    $table = validate_identifier($table, 'table name');
+    $connection = Database::connection();
+
     $result = mysqli_query($connection, 'SHOW COLUMNS FROM `' . $table . '` LIKE \'' . mysqli_real_escape_string($connection, $column) . '\'');
 
     return $result !== false && mysqli_num_rows($result) > 0;
 }
 
-function run_sql(\mysqli $connection, string $sql): void
+function run_sql(string $sql): void
 {
-    if (!mysqli_query($connection, $sql)) {
-        fail('Schema delta failed: ' . mysqli_error($connection) . "\n" . $sql);
+    if (!mysqli_query(Database::connection(), $sql)) {
+        fail('Schema delta failed: ' . mysqli_error(Database::connection()) . "\n" . $sql);
     }
 }
 
@@ -223,9 +272,9 @@ function schema_deltas(): array
     return [
         [
             'name' => 'create_items_and_links_tables',
-            'check' => fn (\mysqli $c) => table_exists($c, 'Items') && table_exists($c, 'Links'),
-            'apply' => function (\mysqli $c): void {
-                run_sql($c, '
+            'check' => fn () => table_exists('Items') && table_exists('Links'),
+            'apply' => function (): void {
+                run_sql('
 CREATE TABLE `Items` (
   `itemId` int(10) unsigned NOT NULL AUTO_INCREMENT,
   `type` varchar(50) NOT NULL,
@@ -238,7 +287,7 @@ CREATE TABLE `Items` (
   FULLTEXT KEY `title_description_keywords_fullText` (`title`,`description`,`keywords`,`fullText`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci');
 
-                run_sql($c, '
+                run_sql('
 CREATE TABLE `Links` (
   `parentId` int(10) unsigned NOT NULL,
   `childId` int(10) unsigned NOT NULL,
@@ -252,23 +301,23 @@ CREATE TABLE `Links` (
         ],
         [
             'name' => 'add_url_to_items',
-            'check' => fn (\mysqli $c) => column_exists($c, 'Items', 'url'),
-            'apply' => function (\mysqli $c): void {
-                run_sql($c, 'ALTER TABLE `Items` ADD COLUMN `url` varchar(767) NOT NULL AFTER `itemId`, ADD UNIQUE KEY `url` (`url`)');
+            'check' => fn () => column_exists('Items', 'url'),
+            'apply' => function (): void {
+                run_sql('ALTER TABLE `Items` ADD COLUMN `url` varchar(767) NOT NULL AFTER `itemId`, ADD UNIQUE KEY `url` (`url`)');
             },
         ],
         [
             'name' => 'add_crawledtime_to_items',
-            'check' => fn (\mysqli $c) => column_exists($c, 'Items', 'crawledTime'),
-            'apply' => function (\mysqli $c): void {
-                run_sql($c, 'ALTER TABLE `Items` ADD COLUMN `crawledTime` int(10) unsigned DEFAULT NULL');
+            'check' => fn () => column_exists('Items', 'crawledTime'),
+            'apply' => function (): void {
+                run_sql('ALTER TABLE `Items` ADD COLUMN `crawledTime` int(10) unsigned DEFAULT NULL');
             },
         ],
         [
             'name' => 'add_inc_to_items',
-            'check' => fn (\mysqli $c) => column_exists($c, 'Items', 'inc'),
-            'apply' => function (\mysqli $c): void {
-                run_sql($c, 'ALTER TABLE `Items` ADD COLUMN `inc` int(10) unsigned NOT NULL DEFAULT 1');
+            'check' => fn () => column_exists('Items', 'inc'),
+            'apply' => function (): void {
+                run_sql('ALTER TABLE `Items` ADD COLUMN `inc` int(10) unsigned NOT NULL DEFAULT 1');
             },
         ],
     ];
@@ -278,7 +327,7 @@ heading('Checking schema');
 
 $connection = Database::connection();
 
-run_sql($connection, '
+run_sql('
 CREATE TABLE IF NOT EXISTS `Migrations` (
   `migrationId` int(10) unsigned NOT NULL AUTO_INCREMENT,
   `name` varchar(255) NOT NULL,
@@ -289,20 +338,29 @@ CREATE TABLE IF NOT EXISTS `Migrations` (
 
 foreach (schema_deltas() as $delta) {
     $name = $delta['name'];
-    $already_recorded = mysqli_query($connection, "SELECT 1 FROM `Migrations` WHERE `name` = '" . mysqli_real_escape_string($connection, $name) . "'");
+
+    $recorded_stmt = mysqli_prepare($connection, 'SELECT 1 FROM `Migrations` WHERE `name` = ?');
+    mysqli_stmt_bind_param($recorded_stmt, 's', $name);
+    mysqli_stmt_execute($recorded_stmt);
+    $already_recorded = mysqli_stmt_get_result($recorded_stmt);
 
     if ($already_recorded !== false && mysqli_num_rows($already_recorded) > 0) {
         continue;
     }
 
-    if (($delta['check'])($connection)) {
+    if (($delta['check'])()) {
         ok('Delta "' . $name . '" already satisfied, recording it');
     } else {
-        ($delta['apply'])($connection);
+        ($delta['apply'])();
         ok('Applied delta "' . $name . '"');
     }
 
-    run_sql($connection, "INSERT INTO `Migrations` (`name`) VALUES ('" . mysqli_real_escape_string($connection, $name) . "')");
+    $insert_stmt = mysqli_prepare($connection, 'INSERT INTO `Migrations` (`name`) VALUES (?)');
+    mysqli_stmt_bind_param($insert_stmt, 's', $name);
+
+    if (!mysqli_stmt_execute($insert_stmt)) {
+        fail('Failed to record migration "' . $name . '": ' . mysqli_error($connection));
+    }
 }
 
 // ---------- Web server ----------
