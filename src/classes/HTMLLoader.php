@@ -95,4 +95,35 @@ class HTMLLoader
             $img -> appendChild($document -> createTextNode(' ' . $alt . ' '));
         }
     }
+
+    /**
+     * Every image linked from the page, as ['url' => URL, 'description' =>
+     * string] pairs - the description comes from the *parent* node's text
+     * (the img's own inlined alt text, per inlineImageAltText(), plus
+     * whatever else sits around it, e.g. a figure's caption), not the img
+     * element alone, since an <img> itself never has text content of its
+     * own to describe it. One img at a time, even though a page has many.
+     */
+    public static function extractImageLinks(\DOMDocument $document, URL $baseURL): array
+    {
+        $images = [];
+
+        foreach ($document -> getElementsByTagName('img') as $img) {
+            $src = trim($img -> getAttribute('src'));
+
+            if ($src === '') {
+                continue;
+            }
+
+            $parent = $img -> parentNode;
+            $description = $parent !== null ? trim($parent -> textContent) : '';
+
+            $images[] = [
+                'url' => $baseURL -> resolve(new URL($src)),
+                'description' => $description,
+            ];
+        }
+
+        return $images;
+    }
 }
