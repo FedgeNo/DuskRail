@@ -178,31 +178,104 @@ if ($connection !== false) {
 }
 
 // ---------- Schema ----------
+//
+// Deltas below run in the order they were actually made, oldest first. Each
+// has a `check` (does the live database already reflect this delta?) and an
+// `apply` (the SQL to run if not). `check` lets this stay idempotent and
+// self-healing even if a delta was applied by hand outside this script.
+
+function table_exists(\mysqli $connection, string $table): bool
+{
+    $result = mysqli_query($connection, "SHOW TABLES LIKE '" . mysqli_real_escape_string($connection, $table) . "'");
+
+    return $result !== false && mysqli_num_rows($result) > 0;
+}
+
+function column_exists(\mysqli $connection, string $table, string $column): bool
+{
+    $result = mysqli_query($connection, 'SHOW COLUMNS FROM `' . $table . '` LIKE \'' . mysqli_real_escape_string($connection, $column) . '\'');
+
+    return $result !== false && mysqli_num_rows($result) > 0;
+}
+
+function run_sql(\mysqli $connection, string $sql): void
+{
+    if (!mysqli_query($connection, $sql)) {
+        fail('Schema delta failed: ' . mysqli_error($connection) . "\n" . $sql);
+    }
+}
+
+function schema_deltas(): array
+{
+    return [
+        [
+            'name' => 'create_items_and_links_tables',
+            'check' => fn (\mysqli $c) => table_exists($c, 'Items') && table_exists($c, 'Links'),
+            'apply' => function (\mysqli $c): void {
+                run_sql($c, '
+CREATE TABLE `Items` (
+  `itemId` int(10) unsigned NOT NULL AUTO_INCREMENT,
+  `type` varchar(50) NOT NULL,
+  `title` varchar(255) DEFAULT NULL,
+  `description` text DEFAULT NULL,
+  `keywords` varchar(255) DEFAULT NULL,
+  `fullText` longtext DEFAULT NULL,
+  `fullHTML` longtext DEFAULT NULL,
+  PRIMARY KEY (`itemId`),
+  FULLTEXT KEY `title_description_keywords_fullText` (`title`,`description`,`keywords`,`fullText`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci');
+
+                run_sql($c, '
+CREATE TABLE `Links` (
+  `parentId` int(10) unsigned NOT NULL,
+  `childId` int(10) unsigned NOT NULL,
+  `description` varchar(255) DEFAULT NULL,
+  PRIMARY KEY (`parentId`,`childId`),
+  KEY `childId_parentId` (`childId`,`parentId`),
+  CONSTRAINT `Links_ibfk_1` FOREIGN KEY (`parentId`) REFERENCES `Items` (`itemId`) ON DELETE CASCADE,
+  CONSTRAINT `Links_ibfk_2` FOREIGN KEY (`childId`) REFERENCES `Items` (`itemId`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci');
+            },
+        ],
+        [
+            'name' => 'add_url_to_items',
+            'check' => fn (\mysqli $c) => column_exists($c, 'Items', 'url'),
+            'apply' => function (\mysqli $c): void {
+                run_sql($c, 'ALTER TABLE `Items` ADD COLUMN `url` varchar(767) NOT NULL AFTER `itemId`, ADD UNIQUE KEY `url` (`url`)');
+            },
+        ],
+    ];
+}
 
 heading('Checking schema');
 
 $connection = Database::connection();
 
-$tables = mysqli_query($connection, "SHOW TABLES LIKE 'Items'");
+run_sql($connection, '
+CREATE TABLE IF NOT EXISTS `Migrations` (
+  `migrationId` int(10) unsigned NOT NULL AUTO_INCREMENT,
+  `name` varchar(255) NOT NULL,
+  `appliedAt` datetime NOT NULL DEFAULT current_timestamp(),
+  PRIMARY KEY (`migrationId`),
+  UNIQUE KEY `name` (`name`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci');
 
-if ($tables !== false && mysqli_num_rows($tables) > 0) {
-    ok('Schema already applied');
-} else {
-    $schema_sql = file_get_contents(ROOT_DIR . '/schema.sql');
+foreach (schema_deltas() as $delta) {
+    $name = $delta['name'];
+    $already_recorded = mysqli_query($connection, "SELECT 1 FROM `Migrations` WHERE `name` = '" . mysqli_real_escape_string($connection, $name) . "'");
 
-    if (!mysqli_multi_query($connection, $schema_sql)) {
-        fail('Failed to apply schema.sql: ' . mysqli_error($connection));
+    if ($already_recorded !== false && mysqli_num_rows($already_recorded) > 0) {
+        continue;
     }
 
-    // Drain the multi-query result set so the connection is left in a clean
-    // state - mysqli refuses further queries on it otherwise.
-    do {
-        if ($result = mysqli_store_result($connection)) {
-            mysqli_free_result($result);
-        }
-    } while (mysqli_more_results($connection) && mysqli_next_result($connection));
+    if (($delta['check'])($connection)) {
+        ok('Delta "' . $name . '" already satisfied, recording it');
+    } else {
+        ($delta['apply'])($connection);
+        ok('Applied delta "' . $name . '"');
+    }
 
-    ok('Applied schema.sql');
+    run_sql($connection, "INSERT INTO `Migrations` (`name`) VALUES ('" . mysqli_real_escape_string($connection, $name) . "')");
 }
 
 heading('Done');
