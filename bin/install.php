@@ -177,7 +177,33 @@ if ($connection !== false) {
     ok('Created database "' . $config['database'] . '" and user "' . $config['username'] . '"');
 }
 
-// TODO: apply schema.sql once the schema exists.
+// ---------- Schema ----------
+
+heading('Checking schema');
+
+$connection = Database::connection();
+
+$tables = mysqli_query($connection, "SHOW TABLES LIKE 'Items'");
+
+if ($tables !== false && mysqli_num_rows($tables) > 0) {
+    ok('Schema already applied');
+} else {
+    $schema_sql = file_get_contents(ROOT_DIR . '/schema.sql');
+
+    if (!mysqli_multi_query($connection, $schema_sql)) {
+        fail('Failed to apply schema.sql: ' . mysqli_error($connection));
+    }
+
+    // Drain the multi-query result set so the connection is left in a clean
+    // state - mysqli refuses further queries on it otherwise.
+    do {
+        if ($result = mysqli_store_result($connection)) {
+            mysqli_free_result($result);
+        }
+    } while (mysqli_more_results($connection) && mysqli_next_result($connection));
+
+    ok('Applied schema.sql');
+}
 
 heading('Done');
 echo "DuskRail is set up.\n";
