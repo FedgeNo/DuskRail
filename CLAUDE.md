@@ -24,6 +24,10 @@ A search engine (crawler, index, and search interface) built from the ground up.
 - Every PHP file starts with `declare(strict_types=1);`.
 - Comments explain *why*, not what — used for non-obvious constraints/decisions, not restating the code.
 
+## Crawler conventions
+
+- `crawledTime` being non-`NULL` means "this item is real, presentable content" - never stamp it on an item the crawler couldn't actually turn into something worth showing a search result for. If crawling something fails in a way that leaves nothing usable (an undecodable image, a redirect that couldn't be resolved to anything, a broken/looping redirect), delete the item instead of marking it crawled with empty/null fields.
+
 ## SQL conventions
 
 - Use prepared statements (`mysqli_prepare` + `mysqli_stmt_bind_param`) for every query with a variable value, no exceptions — even hardcoded literals you wrote yourself. The one real exception: `SHOW ... LIKE ?` refuses to prepare at all on MariaDB/MySQL (confirmed directly — `mysqli_prepare()` returns `false`), so those specific statements fall back to `mysqli_real_escape_string()`.
