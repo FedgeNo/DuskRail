@@ -72,4 +72,27 @@ class HTMLLoader
 
         return $pageURL;
     }
+
+    /**
+     * Inlines each <img>'s alt text into itself as a text node, padded with a
+     * space on each side. Not valid HTML - <img> has no content model, and a
+     * browser would never render this - but this DOM is never serialized
+     * back out; it only ever gets walked for its text, and alt text (a photo
+     * caption, a described chart) is real page content that a plain
+     * textContent walk would otherwise skip entirely since it lives in an
+     * attribute, not a child node. The padding keeps it from running into
+     * whatever text sits right before/after the <img> in the markup.
+     */
+    public static function inlineImageAltText(\DOMDocument $document): void
+    {
+        foreach ($document -> getElementsByTagName('img') as $img) {
+            $alt = $img -> getAttribute('alt');
+
+            if (trim($alt) === '') {
+                continue;
+            }
+
+            $img -> appendChild($document -> createTextNode(' ' . $alt . ' '));
+        }
+    }
 }
