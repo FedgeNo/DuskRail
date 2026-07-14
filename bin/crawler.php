@@ -17,6 +17,11 @@ if ($item === null) {
 
 echo 'Next up: ' . $item -> url . ' (itemId ' . $item -> itemId . ")\n";
 
+// Written before any network I/O - if this process hangs and gets killed by
+// bin/crawler-manager.php, this file is the only way that script can find
+// out which item was being worked on when it died.
+file_put_contents(CURRENT_CRAWL_ITEM_FILE, (string) $item -> itemId);
+
 const REDIRECT_STATUS_CODES = [301, 302, 303, 307, 308];
 const MAX_REDIRECTS = 10;
 

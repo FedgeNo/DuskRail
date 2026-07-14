@@ -1,3 +1,4 @@
 /.env
 /thumbnails/*
 !/thumbnails/.gitkeep
+/crawler-current-item
