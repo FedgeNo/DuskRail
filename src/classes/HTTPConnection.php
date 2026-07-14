@@ -17,6 +17,8 @@ class HTTPConnection
 
     public ?int $statusCode = null;
     public array $headers = [];
+    private string $body = '';
+    private bool $bodyRead = false;
 
     public function __construct(URL $url)
     {
@@ -29,16 +31,60 @@ class HTTPConnection
             CURLOPT_CONNECTTIMEOUT => 10,
             CURLOPT_USERAGENT => 'DuskRail/0.1',
             CURLOPT_HEADERFUNCTION => $this -> onHeaderLine(...),
-            // Body bytes aren't read yet - curl_pause() in onHeaderLine()
-            // stops the transfer before this is ever called for real content,
-            // but it still needs to exist and report bytes consumed.
-            CURLOPT_WRITEFUNCTION => fn (\CurlHandle $ch, string $chunk): int => strlen($chunk),
+            // Not read until readBody() resumes the transfer - curl_pause()
+            // in onHeaderLine() stops delivery here before any real content
+            // arrives, but the callback still needs to exist meanwhile.
+            CURLOPT_WRITEFUNCTION => function (\CurlHandle $ch, string $chunk): int {
+                $this -> body .= $chunk;
+
+                return strlen($chunk);
+            },
         ]);
 
         $this -> multiHandle = curl_multi_init();
         curl_multi_add_handle($this -> multiHandle, $this -> easyHandle);
 
         $this -> pullUntilHeadersComplete();
+    }
+
+    /**
+     * The parsed Content-Type header (e.g. "text/html; charset=UTF-8"), or
+     * null if the response didn't send one.
+     */
+    public function contentType(): ?ContentType
+    {
+        return isset($this -> headers['content-type']) ? new ContentType($this -> headers['content-type']) : null;
+    }
+
+    /**
+     * Resumes the paused transfer and reads the rest of the response body to
+     * completion, closing the connection afterward - once a caller decides
+     * the body's worth reading at all, there's no reason left to keep this
+     * one open/pausable.
+     */
+    public function readBody(): string
+    {
+        if ($this -> bodyRead) {
+            return $this -> body;
+        }
+
+        curl_pause($this -> easyHandle, CURLPAUSE_CONT);
+
+        do {
+            $status = curl_multi_exec($this -> multiHandle, $active);
+
+            if ($active) {
+                curl_multi_select($this -> multiHandle);
+            }
+        } while ($active && $status === CURLM_OK);
+
+        curl_multi_remove_handle($this -> multiHandle, $this -> easyHandle);
+        curl_multi_close($this -> multiHandle);
+        curl_close($this -> easyHandle);
+
+        $this -> bodyRead = true;
+
+        return $this -> body;
     }
 
     private function onHeaderLine(\CurlHandle $ch, string $line): int

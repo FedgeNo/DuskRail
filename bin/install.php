@@ -87,11 +87,24 @@ if (version_compare(PHP_VERSION, '8.1', '<')) {
 }
 ok('PHP ' . PHP_VERSION);
 
-foreach (['mysqli'] as $extension) {
+foreach (['mysqli', 'gd', 'mbstring', 'curl', 'dom'] as $extension) {
     if (!extension_loaded($extension)) {
         fail('Missing required PHP extension: ' . $extension);
     }
     ok('ext-' . $extension . ' loaded');
+}
+
+// ---------- Directories ----------
+
+heading('Checking directories');
+
+$thumbnails_dir = ROOT_DIR . '/thumbnails';
+
+if (!is_dir($thumbnails_dir)) {
+    mkdir($thumbnails_dir, 0755, true);
+    ok('Created ' . $thumbnails_dir);
+} else {
+    ok($thumbnails_dir . ' already exists');
 }
 
 // ---------- .env ----------
