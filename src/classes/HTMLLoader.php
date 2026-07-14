@@ -66,7 +66,13 @@ class HTMLLoader
             $href = trim($base -> getAttribute('href'));
 
             if ($base -> hasAttribute('href') && $href !== '') {
-                return $pageURL -> resolve(new URL($href));
+                $resolved = $pageURL -> resolve(new URL($href));
+
+                // A hostile/malformed <base href> (this is untrusted markup)
+                // shouldn't take down every other link on the page with it -
+                // fall back to the page's own URL rather than resolve
+                // everything else against garbage.
+                return $resolved -> isValid() ? $resolved : $pageURL;
             }
         }
 
@@ -103,6 +109,11 @@ class HTMLLoader
      * whatever else sits around it, e.g. a figure's caption), not the img
      * element alone, since an <img> itself never has text content of its
      * own to describe it. One img at a time, even though a page has many.
+     *
+     * src is untrusted - this is markup pulled off the open web, and a src
+     * doesn't have to be a real, fetchable URL at all ("javascript:...",
+     * garbage, empty). Anything that resolves to something isValid() reports
+     * false for is dropped entirely, along with that img tag.
      */
     public static function extractImageLinks(\DOMDocument $document, URL $baseURL): array
     {
@@ -115,15 +126,63 @@ class HTMLLoader
                 continue;
             }
 
+            $url = $baseURL -> resolve(new URL($src));
+
+            if (!$url -> isValid()) {
+                continue;
+            }
+
             $parent = $img -> parentNode;
             $description = $parent !== null ? trim($parent -> textContent) : '';
 
             $images[] = [
-                'url' => $baseURL -> resolve(new URL($src)),
+                'url' => $url,
                 'description' => $description,
             ];
         }
 
         return $images;
+    }
+
+    /**
+     * Every link on the page, as ['url' => URL, 'description' => string]
+     * pairs - same shape as extractImageLinks(), and for the same reason:
+     * the description comes from the *parent* node's text, not the anchor's
+     * own textContent, since surrounding context (a list item, a caption)
+     * often describes the link as much as the link text itself does. There's
+     * no alt-text equivalent to inline first - an anchor's own text is
+     * already a real child node, unlike an img's alt attribute.
+     *
+     * href is just as untrusted as an img's src - "javascript:", "mailto:",
+     * "#fragment-only", empty, or malformed hrefs all get dropped along with
+     * their anchor tag rather than resolved into something used further.
+     */
+    public static function extractAnchorLinks(\DOMDocument $document, URL $baseURL): array
+    {
+        $links = [];
+
+        foreach ($document -> getElementsByTagName('a') as $anchor) {
+            $href = trim($anchor -> getAttribute('href'));
+
+            if ($href === '') {
+                continue;
+            }
+
+            $url = $baseURL -> resolve(new URL($href));
+
+            if (!$url -> isValid()) {
+                continue;
+            }
+
+            $parent = $anchor -> parentNode;
+            $description = $parent !== null ? trim($parent -> textContent) : '';
+
+            $links[] = [
+                'url' => $url,
+                'description' => $description,
+            ];
+        }
+
+        return $links;
     }
 }

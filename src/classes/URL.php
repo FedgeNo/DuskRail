@@ -22,7 +22,12 @@ class URL
 
     public function __construct(string $url)
     {
-        $parts = parse_url($url);
+        // A crawled page's markup is hostile input - parse_url() returns
+        // false outright for a sufficiently malformed string (a stray ":" in
+        // the wrong place, a garbage port, ...) rather than a partial parse.
+        // Treated the same as "nothing parsed", which naturally lands on an
+        // empty scheme/host and fails isValid() below.
+        $parts = parse_url($url) ?: [];
 
         $this -> scheme = strtolower($parts['scheme'] ?? '');
         $this -> host = strtolower($parts['host'] ?? '');
@@ -47,6 +52,21 @@ class URL
         // normalize to the same toString() output instead of being treated
         // (and re-crawled) as distinct pages.
         ksort($this -> queryParameters);
+    }
+
+    /**
+     * Whether this is actually a fetchable web resource - false for anything
+     * a crawled page's markup might hand back that isn't: "javascript:",
+     * "mailto:", "tel:", "data:", a bare "#fragment" or empty href (no
+     * scheme/host at all), or a string malformed enough that parsing
+     * couldn't recover a host. Callers should drop the URL (and whatever
+     * link/img tag produced it) rather than use it any further once this is
+     * false - a crawler that tried to fetch every href verbatim would end up
+     * "GET"-ing mailto: addresses and JS snippets.
+     */
+    public function isValid(): bool
+    {
+        return in_array($this -> scheme, ['http', 'https'], true) && $this -> host !== '';
     }
 
     public function toString(): string
