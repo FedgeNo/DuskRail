@@ -24,6 +24,15 @@ A search engine (crawler, index, and search interface) built from the ground up.
 - Every PHP file starts with `declare(strict_types=1);`.
 - Comments explain *why*, not what — used for non-obvious constraints/decisions, not restating the code.
 
+## SQL conventions
+
+- Use prepared statements (`mysqli_prepare` + `mysqli_stmt_bind_param`) for every query with a variable value, no exceptions — even hardcoded literals you wrote yourself. The one real exception: `SHOW ... LIKE ?` refuses to prepare at all on MariaDB/MySQL (confirmed directly — `mysqli_prepare()` returns `false`), so those specific statements fall back to `mysqli_real_escape_string()`.
+- Backtick-quote every individual identifier (table, column, alias) — never wrap the whole query in backticks, only the identifiers themselves.
+- An identifier that has to be interpolated raw (a database/table/username in DDL/DCL, where MySQL never accepts a placeholder) must be validated first (`validate_identifier()` in `bin/install.php`: letters/digits/underscore only), not just escaped.
+- Never pass the DB connection around as a method/function parameter — call `Database::connection()` directly wherever it's needed. Assign it to a local variable only within a single method/script that reuses it more than once.
+- Every id column is `int(10) unsigned` (never signed) — matches existing `itemId`/`parentId`/`childId`.
+- Multi-line SQL string formatting: opening quote ends its line with nothing after it; the first keyword (`SELECT`/`INSERT`/`UPDATE`/`DELETE`/`ALTER`) starts flush at column 0 on the next line; every subsequent clause keyword (`FROM`, `WHERE`, `SET`, `VALUES`, `ORDER BY`, ...) is indented 4 spaces, flush with each other; the closing `');` is flush at column 0 on its own line. Applies even to short/one-line-looking queries.
+
 ## Project structure
 
 - `init.php` — bootstrap, require this first in any entry point.
