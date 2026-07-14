@@ -22,6 +22,9 @@ $style -> addContent('
     0% { opacity: 0; background-color: #ffd54f; color: #000; }
     100% { opacity: 1; background-color: transparent; }
 }
+#feed .description {
+    color: #adb5bd;
+}
 ');
 $page -> addHeadContent($style);
 

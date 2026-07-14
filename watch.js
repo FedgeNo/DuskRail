@@ -58,7 +58,7 @@
 
         if (item.description) {
             var descriptionLine = document.createElement('div');
-            descriptionLine.className = 'text-muted small';
+            descriptionLine.className = 'description small';
             descriptionLine.textContent = item.description;
             text.appendChild(descriptionLine);
         }
