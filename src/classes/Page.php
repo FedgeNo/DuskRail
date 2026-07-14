@@ -19,14 +19,8 @@ class Page
         $viewport -> content = 'width=device-width, initial-scale=1';
         $page -> addHeadContent($viewport);
 
-        $title_element = new Title();
-        $title_element -> contents[] = $title . ' - ' . $config['siteTitle'];
-        $page -> addHeadContent($title_element);
-
-        $bootstrap = new Link();
-        $bootstrap -> rel = 'stylesheet';
-        $bootstrap -> href = 'https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css';
-        $page -> addHeadContent($bootstrap);
+        $page -> addHeadContent(new Title($title . ' - ' . $config['siteTitle']));
+        $page -> addHeadContent(new BootstrapLink());
 
         $page -> addContent(new MainNavigation());
 
