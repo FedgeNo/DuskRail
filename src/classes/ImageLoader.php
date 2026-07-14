@@ -25,6 +25,17 @@ class ImageLoader
     // directory small regardless of how large the crawl gets.
     private const ITEMS_PER_SHARD = 500;
 
+    /**
+     * The site-relative URL a thumbnail is (or, if it hasn't been crawled/
+     * decoded successfully yet, would be) written to - single source of
+     * truth for the sharding scheme, so nothing else has to duplicate
+     * ITEMS_PER_SHARD to construct this path itself.
+     */
+    public static function thumbnailURL(int $itemId): string
+    {
+        return '/thumbnails/' . intdiv($itemId, self::ITEMS_PER_SHARD) . '/' . $itemId . '.jpg';
+    }
+
     public static function load(string $data, int $itemId): ?\GdImage
     {
         $size = @getimagesizefromstring($data);

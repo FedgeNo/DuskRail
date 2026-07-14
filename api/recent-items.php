@@ -16,7 +16,7 @@ $since = isset($_GET['since']) ? (int) $_GET['since'] : 0;
 $connection = Database::connection();
 
 $select = mysqli_prepare($connection, '
-SELECT `itemId`, `url`, `type`, `title`, `crawledTime`
+SELECT `itemId`, `url`, `type`, `title`, `description`, `crawledTime`
     FROM `Items`
     WHERE `crawledTime` > ?
     ORDER BY `crawledTime` ASC
@@ -29,12 +29,16 @@ $result = mysqli_stmt_get_result($select);
 $items = [];
 
 while ($row = mysqli_fetch_assoc($result)) {
+    $itemId = (int) $row['itemId'];
+
     $items[] = [
-        'itemId' => (int) $row['itemId'],
+        'itemId' => $itemId,
         'url' => $row['url'],
         'type' => $row['type'],
         'title' => $row['title'],
+        'description' => $row['description'],
         'crawledTime' => (int) $row['crawledTime'],
+        'thumbnailUrl' => str_starts_with($row['type'], 'image/') ? ImageLoader::thumbnailURL($itemId) : null,
     ];
 }
 
