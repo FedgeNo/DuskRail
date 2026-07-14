@@ -264,6 +264,13 @@ CREATE TABLE `Links` (
                 run_sql($c, 'ALTER TABLE `Items` ADD COLUMN `crawledTime` int(10) unsigned DEFAULT NULL');
             },
         ],
+        [
+            'name' => 'add_inc_to_items',
+            'check' => fn (\mysqli $c) => column_exists($c, 'Items', 'inc'),
+            'apply' => function (\mysqli $c): void {
+                run_sql($c, 'ALTER TABLE `Items` ADD COLUMN `inc` int(10) unsigned NOT NULL DEFAULT 1');
+            },
+        ],
     ];
 }
 

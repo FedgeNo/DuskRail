@@ -13,6 +13,7 @@ class Item
     public ?string $fullText = null;
     public ?string $fullHTML = null;
     public ?int $crawledTime = null;
+    public ?int $inc = null;
 
     public static function fromRow(array $row): self
     {
@@ -27,6 +28,7 @@ class Item
         $item -> fullText = $row['fullText'];
         $item -> fullHTML = $row['fullHTML'];
         $item -> crawledTime = $row['crawledTime'] !== null ? (int) $row['crawledTime'] : null;
+        $item -> inc = (int) $row['inc'];
 
         return $item;
     }
@@ -60,24 +62,26 @@ SELECT *
      * creates one if this is the first time this URL has been seen - as a
      * single INSERT ... ON DUPLICATE KEY UPDATE against the url unique key,
      * rather than a SELECT to check followed by a separate INSERT. The
-     * UPDATE touches crawledTime (bumped to now) so a duplicate is a real
-     * write, not a no-op; mysqli_insert_id() then returns that existing row's
-     * itemId (confirmed against MariaDB directly - no LAST_INSERT_ID(itemId)
-     * trick needed), which is what the caller needs to write a Links row
-     * regardless of whether this URL was new or already known.
+     * UPDATE bumps inc (a reference count - how many times this URL has been
+     * seen/linked) rather than crawledTime: crawledTime means "actually
+     * fetched", and being merely rediscovered as a link isn't that - touching
+     * it here would make a frequently-linked-but-never-fetched item look
+     * freshly crawled and starve it out of nextToCrawl()'s queue. inc always
+     * changes (it's a genuine +1 every time, never a coincidental repeat), so
+     * it also keeps this a real write rather than a no-op - which is what
+     * makes mysqli_insert_id() return the existing row's itemId at all.
      */
     public static function findOrCreateByURL(URL $url, string $type, ?string $title = null, ?string $description = null): self
     {
         $connection = Database::connection();
         $urlString = $url -> toString();
-        $now = time();
 
         $insert = mysqli_prepare($connection, '
 INSERT INTO `Items` (`url`, `type`, `title`, `description`)
     VALUES (?, ?, ?, ?)
-    ON DUPLICATE KEY UPDATE `crawledTime` = ?
+    ON DUPLICATE KEY UPDATE `inc` = `inc` + 1
 ');
-        mysqli_stmt_bind_param($insert, 'ssssi', $urlString, $type, $title, $description, $now);
+        mysqli_stmt_bind_param($insert, 'ssss', $urlString, $type, $title, $description);
         mysqli_stmt_execute($insert);
 
         $item = new self();

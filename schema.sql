@@ -15,6 +15,7 @@ CREATE TABLE `Items` (
   `fullText` longtext DEFAULT NULL,
   `fullHTML` longtext DEFAULT NULL,
   `crawledTime` int(10) unsigned DEFAULT NULL,
+  `inc` int(10) unsigned NOT NULL DEFAULT 1,
   PRIMARY KEY (`itemId`),
   UNIQUE KEY `url` (`url`),
   FULLTEXT KEY `title_description_keywords_fullText` (`title`,`description`,`keywords`,`fullText`)
