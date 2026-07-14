@@ -30,8 +30,11 @@ class URL
         $this -> pathGiven = isset($parts['path']) && $parts['path'] !== '';
         $this -> path = $this -> pathGiven ? $parts['path'] : '/';
 
-        $port = $parts['port'] ?? null;
-        $this -> port = ($port !== null && $port !== (self::DEFAULT_PORTS[$this -> scheme] ?? null)) ? $port : null;
+        // Always resolved to a real port number (falling back to the scheme's
+        // default) rather than left null - callers that need to actually open
+        // a connection (e.g. cURL's CURLOPT_PORT) shouldn't each have to
+        // re-derive the default port themselves.
+        $this -> port = $parts['port'] ?? self::DEFAULT_PORTS[$this -> scheme] ?? null;
 
         $this -> queryGiven = isset($parts['query']);
         $this -> queryParameters = [];
@@ -50,7 +53,11 @@ class URL
     {
         $url = $this -> scheme . '://' . $this -> host;
 
-        if ($this -> port !== null) {
+        // The port property itself always holds a real number, but the
+        // default for the scheme is still left out of the normalized string -
+        // "https://host/" and "https://host:443/" are the same URL, and only
+        // one of those two spellings should be treated as canonical.
+        if ($this -> port !== (self::DEFAULT_PORTS[$this -> scheme] ?? null)) {
             $url .= ':' . $this -> port;
         }
 
@@ -105,6 +112,13 @@ class URL
 
         $result -> pathGiven = true;
         $result -> queryGiven = $result -> queryParameters !== [];
+
+        // A protocol-relative reference ("//host/path") carries a host but no
+        // scheme, so its own port (derived while parsing it standalone) may
+        // still be null even though $result now has a real scheme inherited
+        // from this URL - re-derive the default here rather than leaving it
+        // null on the final result.
+        $result -> port ??= self::DEFAULT_PORTS[$result -> scheme] ?? null;
 
         return $result;
     }
