@@ -9,6 +9,7 @@ A search engine (crawler, index, and search interface) built from the ground up.
 - Do not spawn multiple subagents/agents in parallel unless the user explicitly asks for it. Work directly, one model/session at a time.
 - Never use the AskUserQuestion pop-up tool. Ask clarifying questions as plain text in the conversation instead.
 - Never use the persistent memory system (no memory files, no MEMORY.md entries). This CLAUDE.md is the only durable record of working rules and project context — keep it up to date instead.
+- `install.sh` must mirror every environment-changing setup step taken on the dev machine (directories, config, database creation/users, Apache/vhost config, package installs, etc.) so the project can be stood up from scratch on a fresh box. Update it in the same step as making the change, not after the fact.
 
 ## Tech stack
 
@@ -24,3 +25,4 @@ A search engine (crawler, index, and search interface) built from the ground up.
 - `src/classes/` — all classes (autoloaded).
 - `src/functions.php` — shared helper functions.
 - `config/` — config.php (gitignored) + config.example.php (template).
+- `install.sh` — reproduces environment setup from scratch (dirs, config, DB, vhost, etc.).
