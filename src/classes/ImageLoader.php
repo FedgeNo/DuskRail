@@ -19,6 +19,12 @@ class ImageLoader
     private const THUMBNAIL_MAX_DIMENSION = 300;
     private const THUMBNAIL_DIRECTORY = ROOT_DIR . '/thumbnails';
 
+    // A directory with hundreds of thousands of files in it gets slow to
+    // work with (listing, backing up, even just `ls`) on most filesystems -
+    // sharding into buckets of a few hundred keeps every individual
+    // directory small regardless of how large the crawl gets.
+    private const ITEMS_PER_SHARD = 500;
+
     public static function load(string $data, int $itemId): ?\GdImage
     {
         $size = @getimagesizefromstring($data);
@@ -62,11 +68,14 @@ class ImageLoader
         imagefill($thumbnail, 0, 0, $white);
         imagecopyresampled($thumbnail, $image, 0, 0, 0, 0, $thumbnailWidth, $thumbnailHeight, $width, $height);
 
-        if (!is_dir(self::THUMBNAIL_DIRECTORY)) {
-            mkdir(self::THUMBNAIL_DIRECTORY, 0755, true);
+        $shard = intdiv($itemId, self::ITEMS_PER_SHARD);
+        $directory = self::THUMBNAIL_DIRECTORY . '/' . $shard;
+
+        if (!is_dir($directory)) {
+            mkdir($directory, 0755, true);
         }
 
-        imagejpeg($thumbnail, self::THUMBNAIL_DIRECTORY . '/' . $itemId . '.jpg', 85);
+        imagejpeg($thumbnail, $directory . '/' . $itemId . '.jpg', 85);
         imagedestroy($thumbnail);
     }
 }
