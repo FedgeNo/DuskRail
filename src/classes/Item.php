@@ -52,4 +52,44 @@ SELECT *
 
         return $row !== null ? self::fromRow($row) : null;
     }
+
+    /**
+     * Finds the existing Item for a URL (the same image/page is routinely
+     * linked from many different pages - it should be one row with many
+     * Links rows pointing at it, not a duplicate per page it's found on) or
+     * creates one if this is the first time this URL has been seen. $type is
+     * only a starting guess (e.g. "image" for something found via <img>,
+     * before it's actually been fetched and its real Content-Type known) -
+     * crawling it later overwrites it with the real value.
+     */
+    public static function findOrCreateByURL(URL $url, string $type, ?string $title = null, ?string $description = null): self
+    {
+        $connection = Database::connection();
+        $urlString = $url -> toString();
+
+        $select = mysqli_prepare($connection, 'SELECT * FROM `Items` WHERE `url` = ? LIMIT 1');
+        mysqli_stmt_bind_param($select, 's', $urlString);
+        mysqli_stmt_execute($select);
+        $row = mysqli_fetch_assoc(mysqli_stmt_get_result($select));
+
+        if ($row !== null) {
+            return self::fromRow($row);
+        }
+
+        $insert = mysqli_prepare($connection, '
+INSERT INTO `Items` (`url`, `type`, `title`, `description`)
+    VALUES (?, ?, ?, ?)
+');
+        mysqli_stmt_bind_param($insert, 'ssss', $urlString, $type, $title, $description);
+        mysqli_stmt_execute($insert);
+
+        $item = new self();
+        $item -> itemId = (int) mysqli_insert_id($connection);
+        $item -> url = $urlString;
+        $item -> type = $type;
+        $item -> title = $title;
+        $item -> description = $description;
+
+        return $item;
+    }
 }
