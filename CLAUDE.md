@@ -10,6 +10,7 @@ A search engine (crawler, index, and search interface) built from the ground up.
 - Never use the AskUserQuestion pop-up tool. Ask clarifying questions as plain text in the conversation instead.
 - Never use the persistent memory system (no memory files, no MEMORY.md entries). This CLAUDE.md is the only durable record of working rules and project context — keep it up to date instead.
 - `bin/install.php` must mirror every environment-changing setup step taken on the dev machine (directories, .env/config, database creation/users, schema, Apache/vhost config, package installs, etc.) so the project can be stood up from scratch on a fresh box. Update it in the same step as making the change, not after the fact.
+- Schema changes go into `bin/install.php`'s `schema_deltas()` list as a new entry appended in the order the change was actually made (oldest first) — never edit an old delta's `apply` in place once it's shipped. Each delta needs a `check` (detects the live DB already reflects it) so re-running stays idempotent/self-healing. Update `schema.sql` alongside as the current full-schema snapshot for manual bootstrapping.
 
 ## Tech stack
 
