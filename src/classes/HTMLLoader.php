@@ -217,6 +217,26 @@ class HTMLLoader
     }
 
     /**
+     * Strips every <style> and <script> element out of the document - their
+     * text content (raw CSS rules, raw JS source) is a real child node as
+     * far as the DOM is concerned, so a plain textContent walk would pull
+     * all of it in as if it were visible page text. Call this after
+     * extractMetadata() (which still needs <script type="application/
+     * ld+json"> intact) and right before extractBodyText().
+     */
+    public static function removeStyleAndScriptTags(\DOMDocument $document): void
+    {
+        foreach (['style', 'script'] as $tagName) {
+            // getElementsByTagName() returns a live list - removing a node
+            // while iterating it directly would shift indices and skip
+            // elements, so the list is snapshotted into a plain array first.
+            foreach (iterator_to_array($document -> getElementsByTagName($tagName)) as $element) {
+                $element -> parentNode?->removeChild($element);
+            }
+        }
+    }
+
+    /**
      * All the plain visible text on the page, whitespace collapsed - real
      * markup indents text nodes with newlines the browser doesn't render, so
      * a raw textContent read is full of runs of whitespace that would only
