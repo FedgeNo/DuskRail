@@ -14,7 +14,15 @@ class MainNavigation extends HTMLObject
         $brand = new Anchor(ServerURL::absolute('/'), $config['siteTitle']);
         $brand -> class = 'NavBrand navbar-brand';
 
-        $this -> addContent($brand);
+        // Bootstrap's plain .navbar has no horizontal padding of its own
+        // (that's normally a .container's job) - without this wrapper the
+        // brand text sits flush against the browser edge instead of lining
+        // up with the page content below it.
+        $container = new Div();
+        $container -> class = 'NavContainer';
+        $container -> addContent($brand);
+
+        $this -> addContent($container);
 
         return parent::toDOM();
     }

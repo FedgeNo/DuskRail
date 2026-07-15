@@ -2,6 +2,7 @@
     var since = 0;
     var feed = document.getElementById('feed');
     var UNDO_WINDOW_MS = 30000;
+    var MAX_FEED_ITEMS = 50;
 
     function setTopic(topic) {
         fetch('/api/set-topic.php', {
@@ -113,6 +114,16 @@
                     feed.appendChild(buildRow(item));
                     since = Math.max(since, item.crawledTime);
                 });
+
+                // Oldest rows are always at the top (appended in
+                // crawledTime order) - trimming from the top as new ones
+                // land at the bottom keeps the feed from growing forever. A
+                // pending delete's undo timer (see buildRow) still fires
+                // normally on a trimmed-away row - it just has nothing left
+                // to visually remove by the time it does.
+                while (feed.children.length > MAX_FEED_ITEMS) {
+                    feed.removeChild(feed.firstElementChild);
+                }
 
                 if (items.length > 0) {
                     feed.scrollTop = feed.scrollHeight;

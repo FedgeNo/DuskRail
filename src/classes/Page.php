@@ -22,12 +22,10 @@ class Page
         $page -> addHeadContent(new Title($title . ' - ' . $config['siteTitle']));
         $page -> addHeadContent(new BootstrapLink());
 
-        // MainNavigation is fixed-top, so it's pulled out of normal flow -
-        // without this, its ~56px navbar height would sit on top of the
-        // first bit of every page's content.
-        $style = new Style();
-        $style -> addContent('body { padding-top: 56px; }');
-        $page -> addHeadContent($style);
+        $stylesheet = new LinkTag();
+        $stylesheet -> rel = 'stylesheet';
+        $stylesheet -> href = ServerURL::absolute('/style.css');
+        $page -> addHeadContent($stylesheet);
 
         $page -> addContent(new MainNavigation());
 

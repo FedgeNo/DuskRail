@@ -15,20 +15,39 @@ $since = isset($_GET['since']) ? (int) $_GET['since'] : 0;
 
 $connection = Database::connection();
 
-$select = mysqli_prepare($connection, '
+if ($since === 0) {
+    // The client's very first poll, with no cursor yet - seed it with only
+    // the most recently crawled items instead of replaying the whole crawl
+    // history forward from the beginning 50 rows at a time. Selected newest
+    // first to get the right 50, then handed back oldest first so the
+    // client can append them in its usual top-to-bottom order and derive
+    // its next cursor from the last one the same way it always does.
+    $select = mysqli_prepare($connection, '
+SELECT `itemId`, `url`, `type`, `title`, `description`, `crawledTime`
+    FROM `Items`
+    WHERE `crawledTime` IS NOT NULL
+    ORDER BY `crawledTime` DESC
+    LIMIT 50
+');
+    mysqli_stmt_execute($select);
+    $result = mysqli_stmt_get_result($select);
+    $rows = array_reverse(mysqli_fetch_all($result, MYSQLI_ASSOC));
+} else {
+    $select = mysqli_prepare($connection, '
 SELECT `itemId`, `url`, `type`, `title`, `description`, `crawledTime`
     FROM `Items`
     WHERE `crawledTime` > ?
     ORDER BY `crawledTime` ASC
     LIMIT 50
 ');
-mysqli_stmt_bind_param($select, 'i', $since);
-mysqli_stmt_execute($select);
-$result = mysqli_stmt_get_result($select);
+    mysqli_stmt_bind_param($select, 'i', $since);
+    mysqli_stmt_execute($select);
+    $rows = mysqli_fetch_all(mysqli_stmt_get_result($select), MYSQLI_ASSOC);
+}
 
 $items = [];
 
-while ($row = mysqli_fetch_assoc($result)) {
+foreach ($rows as $row) {
     $itemId = (int) $row['itemId'];
 
     $items[] = [
