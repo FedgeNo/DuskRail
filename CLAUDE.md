@@ -48,5 +48,5 @@ A search engine (crawler, index, and search interface) built from the ground up.
 - `.env` / `.env.example` — secrets (gitignored) / committed template.
 - `bin/install.php` — CLI installer: checks requirements, writes `.env`, provisions the database/user, applies schema. Run via `php bin/install.php`.
 - `bin/crawler.php` — crawls a single item (`Item::nextToCrawl()`), then exits. Not meant to be run directly in normal operation — see `bin/crawler-manager.php`.
-- `bin/crawler-manager.php` — supervisor loop: runs `bin/crawler.php` repeatedly, one process per item, killing (SIGKILL) any run that hangs past 20 seconds and deleting an item that hangs 3 times in a row. Run via `php bin/crawler-manager.php`; this is what's actually meant to run continuously.
+- `bin/crawler-manager.php` — supervisor loop: runs `bin/crawler.php` repeatedly, one process per item, killing (SIGKILL) any run that hangs past 30 seconds and deleting an item that hangs 3 times in a row. Run via `php bin/crawler-manager.php`; this is what's actually meant to run continuously.
 - `crawler-current-item` — runtime state file (gitignored), written by `bin/crawler.php` right after picking its item, read by `bin/crawler-manager.php` to identify a hung process after killing it.

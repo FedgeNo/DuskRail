@@ -17,7 +17,7 @@ if (PHP_SAPI !== 'cli') {
 
 require __DIR__ . '/../init.php';
 
-const TIMEOUT_SECONDS = 20.0;
+const TIMEOUT_SECONDS = 30.0;
 const POLL_INTERVAL_SECONDS = 0.1;
 const MAX_HANGS_PER_ITEM = 3;
 
