@@ -19,6 +19,7 @@ class Item
 
     public ?int $itemId = null;
     public ?string $url = null;
+    public ?int $hostId = null;
     public ?string $type = null;
     public ?string $title = null;
     public ?string $description = null;
@@ -34,6 +35,7 @@ class Item
 
         $item -> itemId = (int) $row['itemId'];
         $item -> url = $row['url'];
+        $item -> hostId = (int) $row['hostId'];
         $item -> type = $row['type'];
         $item -> title = $row['title'];
         $item -> description = $row['description'];
@@ -62,6 +64,11 @@ class Item
      * average - one strongly on-topic mention should outweigh several
      * unrelated ones. Falls back to the default order for recrawls
      * (everything already crawled once) or when nothing is left unqueued.
+     *
+     * Both queries also only consider items whose host is actually ready to
+     * be hit again (Hosts.nextCrawlTime NULL - never crawled - or already in
+     * the past) - politeness applies before anything else, focused crawl or
+     * not.
      */
     public static function nextToCrawl(?string $topic = null): ?self
     {
@@ -71,8 +78,10 @@ class Item
             $focused = mysqli_prepare($connection, '
 SELECT `Items`.*
     FROM `Items`
+    INNER JOIN `Hosts` ON `Hosts`.`hostId` = `Items`.`hostId`
     LEFT JOIN `Links` ON `Links`.`childId` = `Items`.`itemId`
     WHERE `Items`.`crawledTime` IS NULL
+        AND (`Hosts`.`nextCrawlTime` IS NULL OR `Hosts`.`nextCrawlTime` <= UNIX_TIMESTAMP())
     GROUP BY `Items`.`itemId`
     ORDER BY MAX(MATCH(`Links`.`description`) AGAINST (?)) DESC, `Items`.`itemId` ASC
     LIMIT 1
@@ -87,9 +96,11 @@ SELECT `Items`.*
         }
 
         $result = mysqli_query($connection, '
-SELECT *
+SELECT `Items`.*
     FROM `Items`
-    ORDER BY `crawledTime`
+    INNER JOIN `Hosts` ON `Hosts`.`hostId` = `Items`.`hostId`
+    WHERE `Hosts`.`nextCrawlTime` IS NULL OR `Hosts`.`nextCrawlTime` <= UNIX_TIMESTAMP()
+    ORDER BY `Items`.`crawledTime`
     LIMIT 1
 ');
 
@@ -121,18 +132,20 @@ SELECT *
         $type = self::truncate($type, self::MAX_TYPE_LENGTH);
         $title = self::truncate($title, self::MAX_TITLE_LENGTH);
         $description = self::truncate($description, self::MAX_DESCRIPTION_LENGTH);
+        $hostId = Host::findOrCreateByName($url -> host) -> hostId;
 
         $insert = mysqli_prepare($connection, '
-INSERT INTO `Items` (`url`, `type`, `title`, `description`)
-    VALUES (?, ?, ?, ?)
+INSERT INTO `Items` (`url`, `hostId`, `type`, `title`, `description`)
+    VALUES (?, ?, ?, ?, ?)
     ON DUPLICATE KEY UPDATE `inc` = `inc` + 1
 ');
-        mysqli_stmt_bind_param($insert, 'ssss', $urlString, $type, $title, $description);
+        mysqli_stmt_bind_param($insert, 'sisss', $urlString, $hostId, $type, $title, $description);
         mysqli_stmt_execute($insert);
 
         $item = new self();
         $item -> itemId = (int) mysqli_insert_id($connection);
         $item -> url = $urlString;
+        $item -> hostId = $hostId;
         $item -> type = $type;
         $item -> title = $title;
         $item -> description = $description;
@@ -201,23 +214,28 @@ DELETE FROM `Items`
      * row never had any content of its own (it's just the old address), so
      * it's deleted and the caller gets back the item that already exists at
      * $newURL instead - the two would otherwise represent the same resource
-     * under two different itemIds forever.
+     * under two different itemIds forever. Also repoints hostId - a redirect
+     * can just as easily land on a different host entirely (a domain-wide
+     * 301 to a new site, a CDN move, ...), not just add/drop a trailing
+     * slash on the same one.
      */
     public function redirectTo(URL $newURL): self
     {
         $connection = Database::connection();
         $newURLString = self::truncate($newURL -> toString(), self::MAX_URL_LENGTH);
+        $newHostId = Host::findOrCreateByName($newURL -> host) -> hostId;
 
         try {
             $update = mysqli_prepare($connection, '
 UPDATE `Items`
-    SET `url` = ?
+    SET `url` = ?, `hostId` = ?
     WHERE `itemId` = ?
 ');
-            mysqli_stmt_bind_param($update, 'si', $newURLString, $this -> itemId);
+            mysqli_stmt_bind_param($update, 'sii', $newURLString, $newHostId, $this -> itemId);
             mysqli_stmt_execute($update);
 
             $this -> url = $newURLString;
+            $this -> hostId = $newHostId;
 
             return $this;
         } catch (\mysqli_sql_exception $exception) {

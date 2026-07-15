@@ -5,9 +5,21 @@
 -- schema manually instead:
 --   mysql -u root -p duskrail < schema.sql
 
+CREATE TABLE `Hosts` (
+  `hostId` int(10) unsigned NOT NULL AUTO_INCREMENT,
+  `host` varchar(255) NOT NULL,
+  `robotsTxt` text DEFAULT NULL,
+  `crawledTime` int(10) unsigned DEFAULT NULL,
+  `nextCrawlTime` int(10) unsigned DEFAULT NULL,
+  `inc` int(10) unsigned NOT NULL DEFAULT 1,
+  PRIMARY KEY (`hostId`),
+  UNIQUE KEY `host` (`host`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 CREATE TABLE `Items` (
   `itemId` int(10) unsigned NOT NULL AUTO_INCREMENT,
   `url` varchar(767) NOT NULL,
+  `hostId` int(10) unsigned NOT NULL,
   `type` varchar(50) NOT NULL,
   `title` varchar(255) DEFAULT NULL,
   `description` text DEFAULT NULL,
@@ -18,7 +30,9 @@ CREATE TABLE `Items` (
   `inc` int(10) unsigned NOT NULL DEFAULT 1,
   PRIMARY KEY (`itemId`),
   UNIQUE KEY `url` (`url`),
-  FULLTEXT KEY `title_description_keywords_fullText` (`title`,`description`,`keywords`,`fullText`)
+  KEY `hostId_crawledTime` (`hostId`,`crawledTime`),
+  FULLTEXT KEY `title_description_keywords_fullText` (`title`,`description`,`keywords`,`fullText`),
+  CONSTRAINT `Items_ibfk_1` FOREIGN KEY (`hostId`) REFERENCES `Hosts` (`hostId`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE `Links` (

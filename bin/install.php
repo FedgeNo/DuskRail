@@ -385,6 +385,76 @@ ALTER TABLE `Links`
 ');
             },
         ],
+        [
+            'name' => 'create_hosts_table',
+            'check' => fn () => table_exists('Hosts'),
+            'apply' => function (): void {
+                run_sql('
+CREATE TABLE `Hosts` (
+  `hostId` int(10) unsigned NOT NULL AUTO_INCREMENT,
+  `host` varchar(255) NOT NULL,
+  `robotsTxt` text DEFAULT NULL,
+  `crawledTime` int(10) unsigned DEFAULT NULL,
+  `nextCrawlTime` int(10) unsigned DEFAULT NULL,
+  `inc` int(10) unsigned NOT NULL DEFAULT 1,
+  PRIMARY KEY (`hostId`),
+  UNIQUE KEY `host` (`host`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci');
+            },
+        ],
+        [
+            // check requires the index too, not just the column - a run
+            // that's interrupted partway through the backfill loop below
+            // (this iterates every row in Items, one query pair per row;
+            // on a large table that can take a while) would otherwise look
+            // "already satisfied" on the next run from the column alone,
+            // permanently skipping the rest of the backfill and the
+            // NOT NULL/FK at the end. Confirmed happening in practice.
+            'name' => 'add_hostid_to_items',
+            'check' => fn () => column_exists('Items', 'hostId') && index_exists('Items', 'hostId_crawledTime'),
+            'apply' => function (): void {
+                $connection = Database::connection();
+
+                if (!column_exists('Items', 'hostId')) {
+                    run_sql('
+ALTER TABLE `Items`
+    ADD COLUMN `hostId` int(10) unsigned DEFAULT NULL AFTER `url`
+');
+                }
+
+                // Backfilled via our own URL parser rather than raw SQL
+                // string-mangling - it's the exact same host-extraction
+                // logic every other part of the app already trusts. Only
+                // rows still missing it, so a resumed run picks up where an
+                // interrupted one left off instead of redoing finished rows.
+                $result = mysqli_query($connection, '
+SELECT `itemId`, `url`
+    FROM `Items`
+    WHERE `hostId` IS NULL
+');
+
+                $update = mysqli_prepare($connection, '
+UPDATE `Items`
+    SET `hostId` = ?
+    WHERE `itemId` = ?
+');
+
+                while ($row = mysqli_fetch_assoc($result)) {
+                    $hostId = Host::findOrCreateByName((new URL($row['url'])) -> host) -> hostId;
+                    mysqli_stmt_bind_param($update, 'ii', $hostId, $row['itemId']);
+                    mysqli_stmt_execute($update);
+                }
+
+                if (!index_exists('Items', 'hostId_crawledTime')) {
+                    run_sql('
+ALTER TABLE `Items`
+    MODIFY COLUMN `hostId` int(10) unsigned NOT NULL,
+    ADD KEY `hostId_crawledTime` (`hostId`,`crawledTime`),
+    ADD CONSTRAINT `Items_ibfk_1` FOREIGN KEY (`hostId`) REFERENCES `Hosts` (`hostId`)
+');
+                }
+            },
+        ],
     ];
 }
 
