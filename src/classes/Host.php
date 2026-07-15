@@ -123,14 +123,22 @@ UPDATE `Hosts`
 
     /**
      * Whether robots.txt says not to crawl $path. Deliberately simple - a
-     * plain prefix match against every "Disallow:" line in the whole file,
-     * not a real robots.txt parser: no User-agent grouping (a Disallow
-     * under any user-agent applies, not just ours or "*"), no wildcards. A
-     * Disallow value of "/foo" blocks "/foo", "/foo/bar", and "/foobar"
-     * alike - that's what a path prefix means here, same as the real spec.
-     * An empty Disallow value ("Disallow:" with nothing after it) means
-     * "allow everything" per the spec, so it's skipped rather than
-     * matching every path the way a naive prefix-of-"" check would.
+     * plain prefix match against every "Disallow:" line under a
+     * "User-agent: *" group - not a real robots.txt parser: no wildcards in
+     * the Disallow value itself, no Allow support/precedence. A Disallow
+     * value of "/foo" blocks "/foo", "/foo/bar", and "/foobar" alike -
+     * that's what a path prefix means here, same as the real spec. An empty
+     * Disallow value ("Disallow:" with nothing after it) means "allow
+     * everything" per the spec, so it's skipped rather than matching every
+     * path the way a naive prefix-of-"" check would.
+     *
+     * User-agent grouping specifically does matter, unlike the rest of the
+     * simplifications here - confirmed breaking real crawling otherwise: a
+     * real site's only "Disallow: /" was scoped to "User-agent: ClaudeBot"
+     * (increasingly common - many sites block AI-training bots by name
+     * while leaving general search crawling alone), and ignoring which
+     * group it belonged to made every single path on that site look
+     * disallowed to this crawler too.
      */
     public function isDisallowed(string $path): bool
     {
@@ -138,18 +146,73 @@ UPDATE `Hosts`
             return false;
         }
 
-        foreach (preg_split('/\r\n|\r|\n/', $this -> robotsTxt) as $line) {
-            if (!preg_match('/^\s*Disallow\s*:\s*(.*?)\s*$/i', $line, $match)) {
-                continue;
-            }
-
-            $disallowedPrefix = $match[1];
-
-            if ($disallowedPrefix !== '' && str_starts_with($path, $disallowedPrefix)) {
+        foreach (self::disallowedPrefixesForWildcardUserAgent($this -> robotsTxt) as $disallowedPrefix) {
+            if (str_starts_with($path, $disallowedPrefix)) {
                 return true;
             }
         }
 
         return false;
+    }
+
+    /**
+     * Every Disallow value scoped to "User-agent: *" - the group that
+     * applies to any crawler not specifically named elsewhere in the file,
+     * which this one never is. Consecutive "User-agent:" lines share the
+     * rules that follow them (per spec); a "User-agent:" line seen *after*
+     * a Disallow/Allow starts a fresh group instead of extending the
+     * previous one - the same "*" group can legitimately appear more than
+     * once in one file (e.g. a CMS-generated block appended after a
+     * hand-written one), and both contribute their Disallow lines.
+     */
+    private static function disallowedPrefixesForWildcardUserAgent(string $robotsTxt): array
+    {
+        $prefixes = [];
+        $currentUserAgents = [];
+        // True once *any* real directive (Allow, Disallow, Sitemap,
+        // Content-Signal, Crawl-delay, ...) has been seen since the last
+        // User-agent line - not just Disallow specifically. A group that's
+        // only ever had an "Allow: /" (no Disallow at all, e.g. a
+        // Content-Signal block) still needs the next "User-agent:" line to
+        // start a fresh group rather than silently extending this one -
+        // confirmed happening for real: a file's "User-agent: *" block had
+        // only "Content-Signal:"/"Allow: /" lines, so without this a
+        // following "User-agent: ClaudeBot" merged into the same group as
+        // "*", making its "Disallow: /" apply to this crawler too.
+        $seenDirectiveSinceLastUserAgent = false;
+
+        foreach (preg_split('/\r\n|\r|\n/', $robotsTxt) as $line) {
+            $line = trim($line);
+
+            if ($line === '' || str_starts_with($line, '#')) {
+                continue; // blank/comment lines are invisible to grouping
+            }
+
+            if (preg_match('/^User-agent\s*:\s*(.*)$/i', $line, $match)) {
+                if ($seenDirectiveSinceLastUserAgent) {
+                    $currentUserAgents = [];
+                    $seenDirectiveSinceLastUserAgent = false;
+                }
+
+                $currentUserAgents[] = trim($match[1]);
+                continue;
+            }
+
+            $seenDirectiveSinceLastUserAgent = true;
+
+            if (!preg_match('/^Disallow\s*:\s*(.*?)\s*$/i', $line, $match)) {
+                continue;
+            }
+
+            if (!in_array('*', $currentUserAgents, true)) {
+                continue;
+            }
+
+            if ($match[1] !== '') {
+                $prefixes[] = $match[1];
+            }
+        }
+
+        return $prefixes;
     }
 }
