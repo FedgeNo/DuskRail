@@ -11,12 +11,20 @@ declare(strict_types=1);
  */
 class HTTPConnection
 {
+    // Deliberately generous - a page can be extremely markup-heavy (nested
+    // divs, inline SVGs, huge inlined scripts before removeStyleAndScriptTags()
+    // strips them) and still only contain a perfectly reasonable amount of
+    // actual text. This is a backstop against truly extreme/malicious
+    // responses, not a tight budget.
+    private const MAX_BODY_SIZE = 20 * 1024 * 1024;
+
     private \CurlMultiHandle $multiHandle;
     private \CurlHandle $easyHandle;
     private bool $headersComplete = false;
 
     public ?int $statusCode = null;
     public array $headers = [];
+    public bool $bodyTruncated = false;
     private string $body = '';
     private bool $bodyRead = false;
 
@@ -35,6 +43,16 @@ class HTTPConnection
             // in onHeaderLine() stops delivery here before any real content
             // arrives, but the callback still needs to exist meanwhile.
             CURLOPT_WRITEFUNCTION => function (\CurlHandle $ch, string $chunk): int {
+                if (strlen($this -> body) + strlen($chunk) > self::MAX_BODY_SIZE) {
+                    // Returning anything other than the chunk's real length
+                    // tells curl the write failed, which aborts the transfer
+                    // right here rather than continuing to buffer an
+                    // unbounded response into memory.
+                    $this -> bodyTruncated = true;
+
+                    return 0;
+                }
+
                 $this -> body .= $chunk;
 
                 return strlen($chunk);
