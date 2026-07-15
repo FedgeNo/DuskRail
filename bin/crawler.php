@@ -125,6 +125,7 @@ echo 'Saved ' . count($anchorLinks) . " anchor links.\n";
 
 $metadata = HTMLLoader::extractMetadata($document);
 HTMLLoader::removeStyleAndScriptTags($document);
+HTMLLoader::removeBoilerplateElements($document);
 $bodyText = HTMLLoader::extractBodyText($document);
 
 // Plenty of pages (CERN's own included) emit no description/OG/Twitter/

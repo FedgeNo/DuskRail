@@ -11,6 +11,26 @@ declare(strict_types=1);
  */
 class HTMLLoader
 {
+    // Substring-matched (not exact) against class/id, so this also catches
+    // the BEM/compound-hyphenated variants real sites actually use -
+    // "site-header", "main-nav", "cookie-banner", "footer-widgets" - not
+    // just a bare "nav"/"header"/"footer". Each entry already covers its own
+    // compounds too ("nav" alone matches "navigation"/"navbar"/"subnav").
+    private const BOILERPLATE_CLASS_SUBSTRINGS = [
+        'nav', 'header', 'footer', 'sidebar', 'menu', 'breadcrumb',
+        'cookie', 'banner', 'advert', 'popup', 'modal', 'social-share',
+        // "ad"/"ads" alone would also match "header", "already", "load",
+        // "read", "gradient", "loads", "roads", ... on nearly every page -
+        // hyphen-bounded instead, since real ad-slot classes are almost
+        // always kebab-case ("ad-banner", "google-ads", "ads-container").
+        // "advertisement" is already covered by "advert" above.
+        'ad-', '-ad', 'ads-', '-ads',
+    ];
+
+    // The one case the hyphen-bounded patterns above can't catch: a class
+    // that's *only* "ad" or "ads" with no hyphen at all. Matched as a whole
+    // class token here instead of a substring, for the same reason.
+    private const BOILERPLATE_EXACT_CLASS_TOKENS = ['ad', 'ads'];
     public static function load(string $html, ?string $charset): \DOMDocument
     {
         $charset = strtoupper($charset ?? 'UTF-8');
@@ -227,12 +247,65 @@ class HTMLLoader
     public static function removeStyleAndScriptTags(\DOMDocument $document): void
     {
         foreach (['style', 'script'] as $tagName) {
-            // getElementsByTagName() returns a live list - removing a node
-            // while iterating it directly would shift indices and skip
-            // elements, so the list is snapshotted into a plain array first.
-            foreach (iterator_to_array($document -> getElementsByTagName($tagName)) as $element) {
+            self::removeElements($document -> getElementsByTagName($tagName));
+        }
+    }
+
+    /**
+     * Strips page chrome that's never the actual content: <nav>/<header>/
+     * <footer>/<aside> (reliable regardless of class naming, since they're
+     * semantic HTML5 landmarks), plus anything classed/id'd like navigation,
+     * a header/footer, a sidebar, a cookie banner, an ad slot, a popup/modal,
+     * etc. Best run right before extractBodyText() - same as
+     * removeStyleAndScriptTags(), this only matters for what fullText ends
+     * up containing, not for image/link discovery earlier in the crawl.
+     */
+    public static function removeBoilerplateElements(\DOMDocument $document): void
+    {
+        foreach (['nav', 'header', 'footer', 'aside'] as $tagName) {
+            self::removeElements($document -> getElementsByTagName($tagName));
+        }
+
+        $xpath = new \DOMXPath($document);
+
+        foreach (iterator_to_array($xpath -> query('//*[@class or @id]')) as $element) {
+            if (self::isBoilerplateElement($element)) {
                 $element -> parentNode?->removeChild($element);
             }
+        }
+    }
+
+    private static function isBoilerplateElement(\DOMElement $element): bool
+    {
+        $class = strtolower($element -> getAttribute('class'));
+        $id = strtolower($element -> getAttribute('id'));
+
+        foreach (self::BOILERPLATE_CLASS_SUBSTRINGS as $needle) {
+            if (str_contains($class, $needle) || str_contains($id, $needle)) {
+                return true;
+            }
+        }
+
+        $classTokens = preg_split('/\s+/', $class, -1, PREG_SPLIT_NO_EMPTY);
+
+        foreach (self::BOILERPLATE_EXACT_CLASS_TOKENS as $token) {
+            if (in_array($token, $classTokens, true) || $id === $token) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * $elements is a live DOMNodeList - removing a node while iterating it
+     * directly would shift indices and skip elements, so it's snapshotted
+     * into a plain array first.
+     */
+    private static function removeElements(\DOMNodeList $elements): void
+    {
+        foreach (iterator_to_array($elements) as $element) {
+            $element -> parentNode?->removeChild($element);
         }
     }
 
