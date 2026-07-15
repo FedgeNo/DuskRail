@@ -268,7 +268,12 @@ class HTMLLoader
 
         $xpath = new \DOMXPath($document);
 
-        foreach (iterator_to_array($xpath -> query('//*[@class or @id]')) as $element) {
+        // Excludes <html>/<body> themselves - WordPress (among others) often
+        // puts theme/plugin classes directly on <body> (e.g. a real one seen
+        // in the wild: "mega-menu-header-nav", matching "nav"/"header"/"menu"
+        // all at once), and removing the document's own root/body would wipe
+        // out literally everything rather than just chrome around the edges.
+        foreach (iterator_to_array($xpath -> query('//*[@class or @id][not(self::html)][not(self::body)]')) as $element) {
             if (self::isBoilerplateElement($element)) {
                 $element -> parentNode?->removeChild($element);
             }
