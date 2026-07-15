@@ -11,26 +11,46 @@ declare(strict_types=1);
  */
 class HTMLLoader
 {
-    // Substring-matched (not exact) against class/id, so this also catches
-    // the BEM/compound-hyphenated variants real sites actually use -
-    // "site-header", "main-nav", "cookie-banner", "footer-widgets" - not
-    // just a bare "nav"/"header"/"footer". Each entry already covers its own
-    // compounds too ("nav" alone matches "navigation"/"navbar"/"subnav").
-    private const BOILERPLATE_CLASS_SUBSTRINGS = [
-        'nav', 'header', 'footer', 'sidebar', 'menu', 'breadcrumb',
-        'cookie', 'banner', 'advert', 'popup', 'modal', 'social-share',
-        // "ad"/"ads" alone would also match "header", "already", "load",
-        // "read", "gradient", "loads", "roads", ... on nearly every page -
-        // hyphen-bounded instead, since real ad-slot classes are almost
-        // always kebab-case ("ad-banner", "google-ads", "ads-container").
-        // "advertisement" is already covered by "advert" above.
-        'ad-', '-ad', 'ads-', '-ads',
+    /**
+     * Matched like real CSS class selectors: a whole, exact token in the
+     * space-separated class list (or the whole id), never a substring of a
+     * longer compound word - a raw substring check on "header" would also
+     * match Bootstrap's "page-header" (a plain content-heading style class,
+     * confirmed on a real page - it was silently deleting the page's actual
+     * <h1>) and "nav" would match Drupal's "section-navigation" (a real
+     * content/layout section, not a menu). Real chrome elements almost
+     * always carry one of these as a clean, standalone token, so this list
+     * can afford to include bare, generic words like "nav"/"header" - it's
+     * the exact-token matching that makes that safe, not the word choice.
+     */
+    private const BOILERPLATE_CLASS_TOKENS = [
+        'nav', 'navbar', 'navigation', 'main-nav', 'site-nav', 'sub-nav', 'subnav', 'nav-menu', 'primary-nav', 'top-nav', 'mobile-nav',
+        'header', 'site-header', 'main-header', 'masthead', 'header-wrapper', 'region-header',
+        'footer', 'site-footer', 'main-footer', 'footer-widgets', 'footer-wrapper',
+        'sidebar', 'side-bar', 'widget-area',
+        'menu', 'main-menu', 'dropdown-menu', 'mobile-menu',
+        'breadcrumb', 'breadcrumbs',
+        'cookie', 'cookies', 'cookie-banner', 'cookie-consent', 'cookie-notice',
+        'banner', 'advert', 'advertisement',
+        'popup', 'modal', 'overlay',
+        'social-share', 'share-buttons',
+        'toolbar', 'skip-link',
     ];
 
-    // The one case the hyphen-bounded patterns above can't catch: a class
-    // that's *only* "ad" or "ads" with no hyphen at all. Matched as a whole
-    // class token here instead of a substring, for the same reason.
-    private const BOILERPLATE_EXACT_CLASS_TOKENS = ['ad', 'ads'];
+    /**
+     * "ad"/"ads" specifically, matched with \b...\b against the *raw*
+     * class/id string rather than exact-tokenized like the list above. A
+     * regex word boundary treats a hyphen the same as a space - "ad-banner",
+     * "google-ad", "ads-container" all match - which is exactly why
+     * "header"/"nav" above can't use this (it'd match "page-header" the same
+     * way a bare substring did). But there's no known real content-class
+     * convention that reuses "ad"/"ads" the way Bootstrap's "page-header"
+     * reuses "header", so the looser match is safe here while still
+     * correctly rejecting "already", "load", "read", "gradient", ... (in all
+     * of those, "ad" sits between two letters, never at a boundary).
+     */
+    private const AD_WORD_BOUNDARY_PATTERN = '/\b(?:ad|ads)\b/i';
+
     public static function load(string $html, ?string $charset): \DOMDocument
     {
         $charset = strtoupper($charset ?? 'UTF-8');
@@ -282,24 +302,48 @@ class HTMLLoader
 
     private static function isBoilerplateElement(\DOMElement $element): bool
     {
-        $class = strtolower($element -> getAttribute('class'));
-        $id = strtolower($element -> getAttribute('id'));
+        $class = $element -> getAttribute('class');
+        $id = $element -> getAttribute('id');
 
-        foreach (self::BOILERPLATE_CLASS_SUBSTRINGS as $needle) {
-            if (str_contains($class, $needle) || str_contains($id, $needle)) {
+        // class is a space-separated multi-value list, matched token-exact -
+        // that's what protects "page-header"/"section-navigation" (real
+        // content, confirmed on a real page) from a bare "header"/"nav".
+        $classTokens = preg_split('/\s+/', strtolower($class), -1, PREG_SPLIT_NO_EMPTY);
+
+        foreach (self::BOILERPLATE_CLASS_TOKENS as $token) {
+            if (in_array($token, $classTokens, true)) {
                 return true;
             }
         }
 
-        $classTokens = preg_split('/\s+/', $class, -1, PREG_SPLIT_NO_EMPTY);
+        if (preg_match(self::AD_WORD_BOUNDARY_PATTERN, $class) === 1) {
+            return true;
+        }
 
-        foreach (self::BOILERPLATE_EXACT_CLASS_TOKENS as $token) {
-            if (in_array($token, $classTokens, true) || $id === $token) {
-                return true;
-            }
+        // id is a single value, not a list - and unlike class (reused as
+        // generic utility-styling hooks, which is exactly what caused the
+        // false positives above), a real id is usually one deliberate,
+        // site-specific compound ("cern-toolbar", "wp-toolbar"), so a
+        // substring check (via the same word-boundary regex, extended to
+        // the whole token list) carries much less collision risk here.
+        if ($id !== '' && (preg_match(self::AD_WORD_BOUNDARY_PATTERN, $id) === 1 || preg_match(self::idBoundaryPattern(), $id) === 1)) {
+            return true;
         }
 
         return false;
+    }
+
+    /**
+     * The full BOILERPLATE_CLASS_TOKENS list, as one \b...\b-bounded regex -
+     * built once (not per call) and only ever used against id (never
+     * class), where the same "utility class reused for real content" risk
+     * that ruled out this looser matching for class doesn't apply.
+     */
+    private static function idBoundaryPattern(): string
+    {
+        static $pattern = null;
+
+        return $pattern ??= '/\b(?:' . implode('|', array_map(fn (string $token) => preg_quote($token, '/'), self::BOILERPLATE_CLASS_TOKENS)) . ')\b/i';
     }
 
     /**
