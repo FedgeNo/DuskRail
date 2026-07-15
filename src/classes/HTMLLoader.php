@@ -173,7 +173,7 @@ class HTMLLoader
             }
 
             $parent = $img -> parentNode;
-            $description = $parent !== null ? trim($parent -> textContent) : '';
+            $description = $parent !== null ? self::normalizeWhitespace($parent -> textContent) : '';
 
             $images[] = [
                 'url' => $url,
@@ -215,7 +215,7 @@ class HTMLLoader
             }
 
             $parent = $anchor -> parentNode;
-            $description = $parent !== null ? trim($parent -> textContent) : '';
+            $description = $parent !== null ? self::normalizeWhitespace($parent -> textContent) : '';
 
             $links[] = [
                 'url' => $url,
@@ -359,7 +359,7 @@ class HTMLLoader
     }
 
     /**
-     * All the plain visible text on the page, whitespace collapsed - real
+     * All the plain visible text on the page, whitespace normalized - real
      * markup indents text nodes with newlines the browser doesn't render, so
      * a raw textContent read is full of runs of whitespace that would only
      * bloat what actually gets stored/searched. Runs after
@@ -369,7 +369,25 @@ class HTMLLoader
     {
         $body = $document -> getElementsByTagName('body') -> item(0);
 
-        return trim(preg_replace('/\s+/', ' ', $body?->textContent ?? ''));
+        return self::normalizeWhitespace($body?->textContent ?? '');
+    }
+
+    /**
+     * Collapses any run of whitespace to a single space, except newlines -
+     * those are capped at 2 in a row (one blank line, i.e. a paragraph
+     * break) rather than collapsed to 1, so real markup indentation gets
+     * flattened while an actual paragraph break survives as one. No space
+     * is ever left touching a newline (leading/trailing on a paragraph),
+     * only the newline itself separates paragraphs.
+     */
+    private static function normalizeWhitespace(string $text): string
+    {
+        $text = str_replace(["\r\n", "\r"], "\n", $text);
+        $text = preg_replace('/[^\S\n]+/', ' ', $text);
+        $text = preg_replace('/ *\n */', "\n", $text);
+        $text = preg_replace('/\n{3,}/', "\n\n", $text);
+
+        return trim($text);
     }
 
     private static function metaContent(\DOMDocument $document, string $attribute, string $value): ?string
