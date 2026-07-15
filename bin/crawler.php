@@ -18,9 +18,21 @@ const JS_CHALLENGE_TITLES = ['Just a moment...'];
  * toward that host's politeness cooldown, not just the one that happened to
  * return real content.
  */
-function recordHostCrawl(URL $url, int $statusCode): void
+function recordHostCrawl(Host $host, int $statusCode): void
 {
-    Host::findOrCreateByName($url -> host) -> recordCrawl(in_array($statusCode, RATE_LIMITED_STATUS_CODES, true));
+    $host -> recordCrawl(in_array($statusCode, RATE_LIMITED_STATUS_CODES, true));
+}
+
+/**
+ * The Host for $url, with robots.txt already fetched/cached if this is the
+ * first time anything from it has been seen.
+ */
+function hostFor(URL $url): Host
+{
+    $host = Host::findOrCreateByName($url -> host);
+    $host -> fetchRobotsTxtIfMissing($url -> scheme);
+
+    return $host;
 }
 
 $topic = is_file(CRAWL_TOPIC_FILE) ? trim(file_get_contents(CRAWL_TOPIC_FILE)) : null;
@@ -39,15 +51,16 @@ echo 'Next up: ' . $item -> url . ' (itemId ' . $item -> itemId . ")\n";
 file_put_contents(CURRENT_CRAWL_ITEM_FILE, (string) $item -> itemId);
 
 $pageURL = new URL($item -> url);
+$host = hostFor($pageURL);
 
-// robots.txt is fetched (and cached indefinitely) at most once per host, the
-// first time anything from it is crawled. This is itself a real request to
-// the host, so it's recorded as one below via the same recordHostCrawl()
-// every other request uses - not a politeness exemption.
-Host::findOrCreateByName($pageURL -> host) -> fetchRobotsTxtIfMissing($pageURL -> scheme);
+if ($host -> isDisallowed($pageURL -> path)) {
+    $item -> delete();
+    echo "robots.txt disallows this path, deleted this item.\n";
+    exit(0);
+}
 
 $connection = new HTTPConnection($pageURL);
-recordHostCrawl($pageURL, $connection -> statusCode);
+recordHostCrawl($host, $connection -> statusCode);
 
 for ($hop = 0; in_array($connection -> statusCode, REDIRECT_STATUS_CODES, true); $hop++) {
     if ($hop >= MAX_REDIRECTS) {
@@ -83,8 +96,16 @@ for ($hop = 0; in_array($connection -> statusCode, REDIRECT_STATUS_CODES, true);
     }
 
     $pageURL = new URL($item -> url);
+    $host = hostFor($pageURL);
+
+    if ($host -> isDisallowed($pageURL -> path)) {
+        $item -> delete();
+        echo "robots.txt disallows the redirect target, deleted this item.\n";
+        exit(0);
+    }
+
     $connection = new HTTPConnection($pageURL);
-    recordHostCrawl($pageURL, $connection -> statusCode);
+    recordHostCrawl($host, $connection -> statusCode);
 }
 
 if (in_array($connection -> statusCode, RATE_LIMITED_STATUS_CODES, true)) {
@@ -155,6 +176,15 @@ HTMLLoader::inlineImageAltText($document);
 $images = HTMLLoader::extractImageLinks($document, $baseURL);
 
 foreach ($images as $image) {
+    // Only checked for same-host links - robots.txt is this site's own
+    // rules for its own paths, not a statement about paths on other sites
+    // it happens to link to, and checking every external host would mean
+    // fetching robots.txt for every domain a page links to just to discover
+    // its links, not just the ones actually crawled.
+    if ($image['url'] -> host === $pageURL -> host && $host -> isDisallowed($image['url'] -> path)) {
+        continue;
+    }
+
     $imageItem = Item::findOrCreateByURL($image['url'], 'image', null, $image['description'] ?: null);
     Link::create($item -> itemId, $imageItem -> itemId, $image['description'] ?: null);
 }
@@ -169,6 +199,12 @@ foreach ($anchorLinks as $link) {
     // request, making the same login link look like a brand new URL every
     // time it's encountered. Never even worth creating an item for.
     if ($link['url'] -> isLikelyOAuthURL()) {
+        continue;
+    }
+
+    // Same reasoning as the image loop above - only this site's own
+    // robots.txt, only for this site's own paths.
+    if ($link['url'] -> host === $pageURL -> host && $host -> isDisallowed($link['url'] -> path)) {
         continue;
     }
 

@@ -34,12 +34,21 @@ own placeholder metadata. The images/links already extracted from its markup
 are kept regardless. Revisit this once headless-browser fetching exists -
 these items should get properly recrawled and reprocessed for real content.
 
-## Actually enforce robots.txt
+## robots.txt enforcement is deliberately simple, not a real parser
 
-`Hosts.robotsTxt` is fetched and cached once per host
-(`Host::fetchRobotsTxtIfMissing()`), but nothing parses it or checks a URL
-against its Disallow/Allow rules before crawling yet - it's just sitting
-there as raw text. Needs: a real robots.txt parser (User-agent groups,
-Disallow/Allow precedence, wildcards), and a check in `bin/crawler.php`
-before fetching a URL (or ideally before ever creating an `Items` row for
-one that's disallowed, so the crawl doesn't even discover/queue it).
+`Host::isDisallowed()` enforces robots.txt now (checked before fetching the
+item itself, before following each redirect hop, and before inserting a
+same-host image/link discovered on the page), but on purpose it's just a
+plain prefix match against every `Disallow:` line in the whole file - not a
+real robots.txt parser. Known gaps if this ever needs to get more correct:
+
+- No User-agent grouping - a `Disallow` under any user-agent applies, not
+  just ours or `*`. More conservative than the spec, not less.
+- No wildcard (`*`, `$`) support in Disallow/Allow values - a pattern like
+  `/wp-content/*.js$` is just plain text as far as this is concerned, never
+  matched as a wildcard.
+- No `Allow` support at all, so no Allow-overrides-Disallow precedence
+  (e.g. home.cern's actual robots.txt has `Allow: /wp-content/*.css$` carving
+  an exception out of the broader `Disallow: /wp-content/` - that Allow is
+  simply invisible to this implementation, so the whole `/wp-content/` prefix
+  stays blocked including the stylesheets it meant to exempt).

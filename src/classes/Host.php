@@ -95,9 +95,7 @@ UPDATE `Hosts`
 
     /**
      * Fetches and caches this host's robots.txt the first time it's seen -
-     * never refetched after that (no TTL/refresh policy yet). This only
-     * stores the content; nothing parses or enforces its rules yet - see
-     * TODO.md.
+     * never refetched after that (no TTL/refresh policy yet).
      */
     public function fetchRobotsTxtIfMissing(string $scheme): void
     {
@@ -121,5 +119,37 @@ UPDATE `Hosts`
 ');
         mysqli_stmt_bind_param($update, 'si', $this -> robotsTxt, $this -> hostId);
         mysqli_stmt_execute($update);
+    }
+
+    /**
+     * Whether robots.txt says not to crawl $path. Deliberately simple - a
+     * plain prefix match against every "Disallow:" line in the whole file,
+     * not a real robots.txt parser: no User-agent grouping (a Disallow
+     * under any user-agent applies, not just ours or "*"), no wildcards. A
+     * Disallow value of "/foo" blocks "/foo", "/foo/bar", and "/foobar"
+     * alike - that's what a path prefix means here, same as the real spec.
+     * An empty Disallow value ("Disallow:" with nothing after it) means
+     * "allow everything" per the spec, so it's skipped rather than
+     * matching every path the way a naive prefix-of-"" check would.
+     */
+    public function isDisallowed(string $path): bool
+    {
+        if ($this -> robotsTxt === null || $this -> robotsTxt === '') {
+            return false;
+        }
+
+        foreach (preg_split('/\r\n|\r|\n/', $this -> robotsTxt) as $line) {
+            if (!preg_match('/^\s*Disallow\s*:\s*(.*?)\s*$/i', $line, $match)) {
+                continue;
+            }
+
+            $disallowedPrefix = $match[1];
+
+            if ($disallowedPrefix !== '' && str_starts_with($path, $disallowedPrefix)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 }
