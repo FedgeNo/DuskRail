@@ -66,6 +66,17 @@ for ($hop = 0; in_array($connection -> statusCode, REDIRECT_STATUS_CODES, true);
     $connection = new HTTPConnection($pageURL);
 }
 
+if ($connection -> statusCode < 200 || $connection -> statusCode >= 300) {
+    // A 404, 500, 403, ... never has real content behind it worth keeping -
+    // whatever body an error page returns isn't presentable, and there's
+    // nothing to retry here (the URL is what it is), so this is exactly the
+    // same call as an unrecoverable redirect: delete, don't markCrawled().
+    $connection -> readBody();
+    $item -> delete();
+    echo 'Status ' . $connection -> statusCode . ", deleted this item.\n";
+    exit(0);
+}
+
 $contentType = $connection -> contentType();
 
 if ($contentType !== null && $contentType -> isImage()) {
