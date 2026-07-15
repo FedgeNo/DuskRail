@@ -6,6 +6,26 @@ class URL
 {
     private const DEFAULT_PORTS = ['http' => 80, 'https' => 443];
 
+    // Only well-known, unambiguous tracking-only params - never anything
+    // generic enough ("ref", "source") that a real site might use for actual
+    // functional/navigational state. Stripped once here, at construction, so
+    // they never make it into $queryParameters at all - toString(),
+    // resolve(), and every hash/comparison downstream just never sees them,
+    // rather than every caller needing to filter them out itself.
+    private const TRACKING_PARAMETERS = [
+        // Google Analytics ("urchin" tracking module, historically utmx/urchin.js)
+        'utm_source', 'utm_medium', 'utm_campaign', 'utm_term', 'utm_content',
+        'utm_id', 'utm_source_platform', 'utm_creative_format', 'utm_marketing_tactic',
+        'utm_name', 'utm_reader', 'utm_viz_id',
+        // Ad-network click ids
+        'gclid', 'gclsrc', 'dclid', 'gbraid', 'wbraid', 'msclkid',
+        // Social platforms
+        'fbclid', 'twclid', 'ttclid', 'igshid', 'igsh',
+        // Email marketing
+        'mc_cid', 'mc_eid', '_hsenc', '_hsmi', 'hsCtaTracking', 'vero_id',
+        'yclid', 'mkt_tok',
+    ];
+
     public string $scheme;
     public string $host;
     public ?int $port;
@@ -45,6 +65,10 @@ class URL
         $this -> queryParameters = [];
         if ($this -> queryGiven) {
             parse_str($parts['query'], $this -> queryParameters);
+
+            foreach (self::TRACKING_PARAMETERS as $trackingParameter) {
+                unset($this -> queryParameters[$trackingParameter]);
+            }
         }
 
         // Canonical query parameter order - two URLs differing only in query
