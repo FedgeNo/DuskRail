@@ -8,6 +8,21 @@ if (PHP_SAPI !== 'cli') {
 
 require __DIR__ . '/../init.php';
 
+const REDIRECT_STATUS_CODES = [301, 302, 303, 307, 308];
+const RATE_LIMITED_STATUS_CODES = [429, 503];
+const MAX_REDIRECTS = 10;
+const JS_CHALLENGE_TITLES = ['Just a moment...'];
+
+/**
+ * Every actual request made (each redirect hop, and the final fetch) counts
+ * toward that host's politeness cooldown, not just the one that happened to
+ * return real content.
+ */
+function recordHostCrawl(URL $url, int $statusCode): void
+{
+    Host::findOrCreateByName($url -> host) -> recordCrawl(in_array($statusCode, RATE_LIMITED_STATUS_CODES, true));
+}
+
 $topic = is_file(CRAWL_TOPIC_FILE) ? trim(file_get_contents(CRAWL_TOPIC_FILE)) : null;
 $item = Item::nextToCrawl($topic !== '' ? $topic : null);
 
@@ -23,11 +38,16 @@ echo 'Next up: ' . $item -> url . ' (itemId ' . $item -> itemId . ")\n";
 // out which item was being worked on when it died.
 file_put_contents(CURRENT_CRAWL_ITEM_FILE, (string) $item -> itemId);
 
-const REDIRECT_STATUS_CODES = [301, 302, 303, 307, 308];
-const MAX_REDIRECTS = 10;
-
 $pageURL = new URL($item -> url);
+
+// robots.txt is fetched (and cached indefinitely) at most once per host, the
+// first time anything from it is crawled. This is itself a real request to
+// the host, so it's recorded as one below via the same recordHostCrawl()
+// every other request uses - not a politeness exemption.
+Host::findOrCreateByName($pageURL -> host) -> fetchRobotsTxtIfMissing($pageURL -> scheme);
+
 $connection = new HTTPConnection($pageURL);
+recordHostCrawl($pageURL, $connection -> statusCode);
 
 for ($hop = 0; in_array($connection -> statusCode, REDIRECT_STATUS_CODES, true); $hop++) {
     if ($hop >= MAX_REDIRECTS) {
@@ -64,6 +84,18 @@ for ($hop = 0; in_array($connection -> statusCode, REDIRECT_STATUS_CODES, true);
 
     $pageURL = new URL($item -> url);
     $connection = new HTTPConnection($pageURL);
+    recordHostCrawl($pageURL, $connection -> statusCode);
+}
+
+if (in_array($connection -> statusCode, RATE_LIMITED_STATUS_CODES, true)) {
+    // The server explicitly asked to be left alone, not "this doesn't
+    // exist" - recordHostCrawl() above already backed this host off 5
+    // minutes. The item itself is left alone (crawledTime still NULL) so
+    // nextToCrawl() simply retries it once that cooldown passes, rather
+    // than deleting it like a genuine permanent failure.
+    $connection -> readBody();
+    echo 'Status ' . $connection -> statusCode . ", backing off this host, item left for retry.\n";
+    exit(0);
 }
 
 if ($connection -> statusCode < 200 || $connection -> statusCode >= 300) {
@@ -161,8 +193,6 @@ $metadata = HTMLLoader::extractMetadata($document);
 // headless-browser pass would need to inject and re-evaluate, so there's no
 // reason to throw it away. The images/links already extracted from this
 // page's markup above are kept regardless of any of this.
-const JS_CHALLENGE_TITLES = ['Just a moment...'];
-
 if (in_array($metadata['title'], JS_CHALLENGE_TITLES, true)) {
     $item -> markCrawled($contentType -> type, $item -> title, $item -> description, $item -> keywords, null, $html);
     echo "JS challenge page, marked crawled (kept existing title/description).\n";
