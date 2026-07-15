@@ -33,3 +33,13 @@ discovered as a link rather than overwriting them with the challenge page's
 own placeholder metadata. The images/links already extracted from its markup
 are kept regardless. Revisit this once headless-browser fetching exists -
 these items should get properly recrawled and reprocessed for real content.
+
+## Actually enforce robots.txt
+
+`Hosts.robotsTxt` is fetched and cached once per host
+(`Host::fetchRobotsTxtIfMissing()`), but nothing parses it or checks a URL
+against its Disallow/Allow rules before crawling yet - it's just sitting
+there as raw text. Needs: a real robots.txt parser (User-agent groups,
+Disallow/Allow precedence, wildcards), and a check in `bin/crawler.php`
+before fetching a URL (or ideally before ever creating an `Items` row for
+one that's disallowed, so the crawl doesn't even discover/queue it).
