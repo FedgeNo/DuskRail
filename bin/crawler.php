@@ -150,6 +150,25 @@ foreach ($anchorLinks as $link) {
 echo 'Saved ' . count($anchorLinks) . " anchor links.\n";
 
 $metadata = HTMLLoader::extractMetadata($document);
+
+// A JS bot-challenge interstitial ("Just a moment..." - Cloudflare's, the
+// one actually seen in this crawl), not the real page behind it - see
+// TODO.md for the planned headless-browser fix. For now: mark crawled
+// anyway (so nextToCrawl() stops retrying it) but keep whatever title/
+// description this item already had from being discovered as a link,
+// rather than overwriting them with the challenge page's own placeholder
+// metadata. fullHTML is still saved - it's exactly what a future
+// headless-browser pass would need to inject and re-evaluate, so there's no
+// reason to throw it away. The images/links already extracted from this
+// page's markup above are kept regardless of any of this.
+const JS_CHALLENGE_TITLES = ['Just a moment...'];
+
+if (in_array($metadata['title'], JS_CHALLENGE_TITLES, true)) {
+    $item -> markCrawled($contentType -> type, $item -> title, $item -> description, $item -> keywords, null, $html);
+    echo "JS challenge page, marked crawled (kept existing title/description).\n";
+    exit(0);
+}
+
 HTMLLoader::removeStyleAndScriptTags($document);
 HTMLLoader::removeBoilerplateElements($document);
 $bodyText = HTMLLoader::extractBodyText($document);
