@@ -4,6 +4,19 @@ declare(strict_types=1);
 
 class Item
 {
+    // Matches schema.sql's column definitions - kept here so every write
+    // path truncates to the same limits instead of finding out about them
+    // one "Data too long" mysqli_sql_exception at a time. fullText/fullHTML
+    // are LONGTEXT (4GB) - no realistic page gets remotely close, so they're
+    // not guarded here.
+    private const MAX_URL_LENGTH = 767;
+    private const MAX_TYPE_LENGTH = 50;
+    private const MAX_TITLE_LENGTH = 255;
+    private const MAX_KEYWORDS_LENGTH = 255;
+    // description is TEXT (65,535 bytes) - utf8mb4's worst case is 4
+    // bytes/char, so this is a safe character-count ceiling with headroom.
+    private const MAX_DESCRIPTION_LENGTH = 16000;
+
     public ?int $itemId = null;
     public ?string $url = null;
     public ?string $type = null;
@@ -104,7 +117,10 @@ SELECT *
     public static function findOrCreateByURL(URL $url, string $type, ?string $title = null, ?string $description = null): self
     {
         $connection = Database::connection();
-        $urlString = $url -> toString();
+        $urlString = self::truncate($url -> toString(), self::MAX_URL_LENGTH);
+        $type = self::truncate($type, self::MAX_TYPE_LENGTH);
+        $title = self::truncate($title, self::MAX_TITLE_LENGTH);
+        $description = self::truncate($description, self::MAX_DESCRIPTION_LENGTH);
 
         $insert = mysqli_prepare($connection, '
 INSERT INTO `Items` (`url`, `type`, `title`, `description`)
@@ -137,6 +153,11 @@ INSERT INTO `Items` (`url`, `type`, `title`, `description`)
     {
         $connection = Database::connection();
         $now = time();
+
+        $type = self::truncate($type, self::MAX_TYPE_LENGTH);
+        $title = self::truncate($title, self::MAX_TITLE_LENGTH);
+        $description = self::truncate($description, self::MAX_DESCRIPTION_LENGTH);
+        $keywords = self::truncate($keywords, self::MAX_KEYWORDS_LENGTH);
 
         $update = mysqli_prepare($connection, '
 UPDATE `Items`
@@ -185,7 +206,7 @@ DELETE FROM `Items`
     public function redirectTo(URL $newURL): self
     {
         $connection = Database::connection();
-        $newURLString = $newURL -> toString();
+        $newURLString = self::truncate($newURL -> toString(), self::MAX_URL_LENGTH);
 
         try {
             $update = mysqli_prepare($connection, '
@@ -213,5 +234,19 @@ SELECT *
 
             return self::fromRow(mysqli_fetch_assoc(mysqli_stmt_get_result($select)));
         }
+    }
+
+    /**
+     * mb_substr, not substr - these columns are utf8mb4, and cutting a
+     * multi-byte character in half would either corrupt it or (depending on
+     * exactly where the cut lands) still overflow the column. Truncating url
+     * specifically is a last resort, not a fix - a cut-off URL points at a
+     * different resource or nothing at all - but it's still better than this
+     * throwing a mysqli_sql_exception and killing the whole crawl process
+     * over one pathological page.
+     */
+    private static function truncate(?string $value, int $maxLength): ?string
+    {
+        return $value !== null ? mb_substr($value, 0, $maxLength) : null;
     }
 }
