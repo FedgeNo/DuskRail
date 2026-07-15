@@ -38,6 +38,14 @@ class HTTPConnection
             CURLOPT_HTTPGET => true,
             CURLOPT_CONNECTTIMEOUT => 10,
             CURLOPT_USERAGENT => 'DuskRail/0.1',
+            // Without this, curl sends no Accept-Encoding at all - but some
+            // servers gzip the response anyway regardless (confirmed: a real
+            // robots.txt fetch came back as raw gzip bytes, which then
+            // failed to insert as invalid UTF-8). An empty string means
+            // "accept and auto-decode every encoding curl was built with"
+            // (gzip, deflate, br, ...), so the body handed to $this->body is
+            // always the real decompressed content either way.
+            CURLOPT_ENCODING => '',
             CURLOPT_HEADERFUNCTION => $this -> onHeaderLine(...),
             // Not read until readBody() resumes the transfer - curl_pause()
             // in onHeaderLine() stops delivery here before any real content
