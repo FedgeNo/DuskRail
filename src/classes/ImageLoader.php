@@ -16,6 +16,12 @@ class ImageLoader
     // would actually serve, well below what a crafted small file can claim.
     private const MAX_PIXELS = 40_000_000;
 
+    // Below this on either side, it's a tracking pixel, spacer gif, or
+    // decorative icon rather than real presentable content - not worth a
+    // search result. Comfortably below a real favicon-sized logo (usually
+    // 32-64px) while still catching 1x1s and other tiny junk.
+    private const MIN_DIMENSION = 100;
+
     private const THUMBNAIL_MAX_DIMENSION = 300;
     private const THUMBNAIL_DIRECTORY = ROOT_DIR . '/thumbnails';
 
@@ -47,6 +53,10 @@ class ImageLoader
         [$width, $height] = $size;
 
         if ($width <= 0 || $height <= 0 || $width * $height > self::MAX_PIXELS) {
+            return null;
+        }
+
+        if ($width < self::MIN_DIMENSION || $height < self::MIN_DIMENSION) {
             return null;
         }
 

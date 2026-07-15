@@ -455,6 +455,19 @@ ALTER TABLE `Items`
                 }
             },
         ],
+        [
+            // Lets Item::nextToCrawl() atomically reserve a row before
+            // handing it to a crawler process, so running several crawlers
+            // concurrently can't hand the same item to two of them at once.
+            'name' => 'add_claimedUntil_to_items',
+            'check' => fn () => column_exists('Items', 'claimedUntil'),
+            'apply' => function (): void {
+                run_sql('
+ALTER TABLE `Items`
+    ADD COLUMN `claimedUntil` int(10) unsigned DEFAULT NULL AFTER `crawledTime`
+');
+            },
+        ],
     ];
 }
 

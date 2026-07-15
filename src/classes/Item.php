@@ -17,6 +17,19 @@ class Item
     // bytes/char, so this is a safe character-count ceiling with headroom.
     private const MAX_DESCRIPTION_LENGTH = 16000;
 
+    // How long a claim on an item lasts before it's considered abandoned and
+    // becomes pickable again - comfortably longer than
+    // bin/crawler-manager.php's hang-kill timeout, so a worker that gets
+    // SIGKILLed mid-crawl frees its item up again on its own rather than
+    // leaving it stuck until some other explicit cleanup.
+    private const CLAIM_WINDOW_SECONDS = 120;
+
+    // How many times nextToCrawl() will retry after losing a claim race to
+    // another concurrent worker before giving up and returning null - under
+    // normal contention (a handful of workers) losing more than a couple of
+    // races in a row would be exceptional, not routine.
+    private const MAX_CLAIM_ATTEMPTS = 10;
+
     public ?int $itemId = null;
     public ?string $url = null;
     public ?int $hostId = null;
@@ -27,6 +40,7 @@ class Item
     public ?string $fullText = null;
     public ?string $fullHTML = null;
     public ?int $crawledTime = null;
+    public ?int $claimedUntil = null;
     public ?int $inc = null;
 
     public static function fromRow(array $row): self
@@ -43,6 +57,7 @@ class Item
         $item -> fullText = $row['fullText'];
         $item -> fullHTML = $row['fullHTML'];
         $item -> crawledTime = $row['crawledTime'] !== null ? (int) $row['crawledTime'] : null;
+        $item -> claimedUntil = $row['claimedUntil'] !== null ? (int) $row['claimedUntil'] : null;
         $item -> inc = (int) $row['inc'];
 
         return $item;
@@ -68,9 +83,45 @@ class Item
      * Both queries also only consider items whose host is actually ready to
      * be hit again (Hosts.nextCrawlTime NULL - never crawled - or already in
      * the past) - politeness applies before anything else, focused crawl or
-     * not.
+     * not - and whose claim (see claim()) has either never been taken or has
+     * expired, so multiple concurrent crawler processes never hand the same
+     * item to two workers at once.
+     *
+     * Both queries also sort a never-attempted item ahead of one whose claim
+     * merely expired without ever completing (crawledTime still NULL despite
+     * claimedUntil being set) - a worker that got SIGKILLed mid-crawl
+     * shouldn't cut in front of the entire backlog of untried items the
+     * moment its claim lapses. It's retried only once every fresh item (and,
+     * in the default query, every normal recrawl too) is exhausted - which in
+     * a continuously-running crawl may never actually happen, short of a
+     * narrow $topic pool running dry.
+     *
+     * Picking a row and claiming it are two separate statements (a plain
+     * SELECT has no way to also lock/reserve what it reads), so there's a
+     * window where a concurrent caller could win the claim first - claim()
+     * reports that via its return value, and the loop here just retries
+     * against a fresh SELECT (which will no longer include the
+     * now-claimed-elsewhere row) rather than assuming its own pick still
+     * stands.
      */
     public static function nextToCrawl(?string $topic = null): ?self
+    {
+        for ($attempt = 0; $attempt < self::MAX_CLAIM_ATTEMPTS; $attempt++) {
+            $row = self::selectCandidateRow($topic);
+
+            if ($row === null) {
+                return null;
+            }
+
+            if (self::claim((int) $row['itemId'])) {
+                return self::fromRow($row);
+            }
+        }
+
+        return null;
+    }
+
+    private static function selectCandidateRow(?string $topic): ?array
     {
         $connection = Database::connection();
 
@@ -82,8 +133,9 @@ SELECT `Items`.*
     LEFT JOIN `Links` ON `Links`.`childId` = `Items`.`itemId`
     WHERE `Items`.`crawledTime` IS NULL
         AND (`Hosts`.`nextCrawlTime` IS NULL OR `Hosts`.`nextCrawlTime` <= UNIX_TIMESTAMP())
+        AND (`Items`.`claimedUntil` IS NULL OR `Items`.`claimedUntil` <= UNIX_TIMESTAMP())
     GROUP BY `Items`.`itemId`
-    ORDER BY MAX(MATCH(`Links`.`description`) AGAINST (?)) DESC, `Items`.`itemId` ASC
+    ORDER BY (`Items`.`claimedUntil` IS NOT NULL) ASC, MAX(MATCH(`Links`.`description`) AGAINST (?)) DESC, `Items`.`itemId` ASC
     LIMIT 1
 ');
             mysqli_stmt_bind_param($focused, 's', $topic);
@@ -91,7 +143,7 @@ SELECT `Items`.*
             $row = mysqli_fetch_assoc(mysqli_stmt_get_result($focused));
 
             if ($row !== null) {
-                return self::fromRow($row);
+                return $row;
             }
         }
 
@@ -99,14 +151,37 @@ SELECT `Items`.*
 SELECT `Items`.*
     FROM `Items`
     INNER JOIN `Hosts` ON `Hosts`.`hostId` = `Items`.`hostId`
-    WHERE `Hosts`.`nextCrawlTime` IS NULL OR `Hosts`.`nextCrawlTime` <= UNIX_TIMESTAMP()
-    ORDER BY `Items`.`crawledTime`
+    WHERE (`Hosts`.`nextCrawlTime` IS NULL OR `Hosts`.`nextCrawlTime` <= UNIX_TIMESTAMP())
+        AND (`Items`.`claimedUntil` IS NULL OR `Items`.`claimedUntil` <= UNIX_TIMESTAMP())
+    ORDER BY (`Items`.`crawledTime` IS NULL AND `Items`.`claimedUntil` IS NOT NULL) ASC, `Items`.`crawledTime` ASC
     LIMIT 1
 ');
 
-        $row = $result !== false ? mysqli_fetch_assoc($result) : null;
+        return $result !== false ? mysqli_fetch_assoc($result) : null;
+    }
 
-        return $row !== null ? self::fromRow($row) : null;
+    /**
+     * Atomically reserves $itemId for CLAIM_WINDOW_SECONDS - the WHERE here
+     * re-checks the same claimedUntil condition selectCandidateRow() already
+     * filtered on, so this UPDATE only actually claims the row (affected
+     * rows > 0) if no other concurrent caller claimed it first in the gap
+     * between that SELECT and this UPDATE.
+     */
+    private static function claim(int $itemId): bool
+    {
+        $connection = Database::connection();
+        $claimedUntil = time() + self::CLAIM_WINDOW_SECONDS;
+
+        $update = mysqli_prepare($connection, '
+UPDATE `Items`
+    SET `claimedUntil` = ?
+    WHERE `itemId` = ?
+        AND (`claimedUntil` IS NULL OR `claimedUntil` <= UNIX_TIMESTAMP())
+');
+        mysqli_stmt_bind_param($update, 'ii', $claimedUntil, $itemId);
+        mysqli_stmt_execute($update);
+
+        return mysqli_stmt_affected_rows($update) > 0;
     }
 
     /**

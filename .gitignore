@@ -1,6 +1,7 @@
 /.env
 /thumbnails/*
 !/thumbnails/.gitkeep
-/crawler-current-item
+/crawler-current-item*
 /crawl-topic
+/logs/
 /.claude/

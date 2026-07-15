@@ -8,6 +8,17 @@ if (PHP_SAPI !== 'cli') {
 
 require __DIR__ . '/../init.php';
 
+// Ignored, not handled - a worker mid-crawl shouldn't stop partway through an
+// item just because Ctrl+C (SIGINT) reached the whole process group, or
+// bin/crawler-manager.php sent SIGTERM during a graceful shutdown. It runs
+// its current item to completion regardless; the manager is what decides
+// when to stop spawning new ones. SIGKILL (used for an actually-hung worker)
+// can't be ignored by any process, so hang-detection is unaffected.
+if (function_exists('pcntl_signal')) {
+    pcntl_signal(SIGINT, SIG_IGN);
+    pcntl_signal(SIGTERM, SIG_IGN);
+}
+
 const REDIRECT_STATUS_CODES = [301, 302, 303, 307, 308];
 const RATE_LIMITED_STATUS_CODES = [429, 503];
 const MAX_REDIRECTS = 10;
@@ -16,11 +27,14 @@ const JS_CHALLENGE_TITLES = ['Just a moment...'];
 /**
  * Every actual request made (each redirect hop, and the final fetch) counts
  * toward that host's politeness cooldown, not just the one that happened to
- * return real content.
+ * return real content. $statusCode is null when the connection itself never
+ * completed (DNS failure, connection refused, TLS handshake failure, ...) -
+ * treated as an ordinary (non-rate-limited) attempt for cooldown purposes,
+ * same as any other single failed request.
  */
-function recordHostCrawl(Host $host, int $statusCode): void
+function recordHostCrawl(Host $host, ?int $statusCode): void
 {
-    $host -> recordCrawl(in_array($statusCode, RATE_LIMITED_STATUS_CODES, true));
+    $host -> recordCrawl($statusCode !== null && in_array($statusCode, RATE_LIMITED_STATUS_CODES, true));
 }
 
 /**
@@ -35,6 +49,13 @@ function hostFor(URL $url): Host
     return $host;
 }
 
+// An optional worker slot number (bin/crawler-manager.php passes one when
+// running several of these concurrently) keeps each worker's "what am I
+// working on" file separate - otherwise concurrent workers would clobber a
+// single shared file and a hang could be blamed on the wrong item entirely.
+$workerSlot = $argv[1] ?? null;
+$currentItemFile = $workerSlot !== null ? CURRENT_CRAWL_ITEM_FILE . '-' . $workerSlot : CURRENT_CRAWL_ITEM_FILE;
+
 $topic = is_file(CRAWL_TOPIC_FILE) ? trim(file_get_contents(CRAWL_TOPIC_FILE)) : null;
 $item = Item::nextToCrawl($topic !== '' ? $topic : null);
 
@@ -48,7 +69,7 @@ echo 'Next up: ' . $item -> url . ' (itemId ' . $item -> itemId . ")\n";
 // Written before any network I/O - if this process hangs and gets killed by
 // bin/crawler-manager.php, this file is the only way that script can find
 // out which item was being worked on when it died.
-file_put_contents(CURRENT_CRAWL_ITEM_FILE, (string) $item -> itemId);
+file_put_contents($currentItemFile, (string) $item -> itemId);
 
 $pageURL = new URL($item -> url);
 $host = hostFor($pageURL);
@@ -61,6 +82,16 @@ if ($host -> isDisallowed($pageURL -> path)) {
 
 $connection = new HTTPConnection($pageURL);
 recordHostCrawl($host, $connection -> statusCode);
+
+if ($connection -> statusCode === null) {
+    // The connection itself never completed (DNS failure, connection
+    // refused, TLS handshake failure, ...) - not an HTTP-level failure at
+    // all, so there's no status code and nothing usable behind it. Same
+    // "nothing to keep" reasoning as any other unrecoverable failure.
+    $item -> delete();
+    echo "Connection failed, deleted this item.\n";
+    exit(0);
+}
 
 for ($hop = 0; in_array($connection -> statusCode, REDIRECT_STATUS_CODES, true); $hop++) {
     if ($hop >= MAX_REDIRECTS) {
@@ -106,6 +137,12 @@ for ($hop = 0; in_array($connection -> statusCode, REDIRECT_STATUS_CODES, true);
 
     $connection = new HTTPConnection($pageURL);
     recordHostCrawl($host, $connection -> statusCode);
+
+    if ($connection -> statusCode === null) {
+        $item -> delete();
+        echo "Connection failed, deleted this item.\n";
+        exit(0);
+    }
 }
 
 if (in_array($connection -> statusCode, RATE_LIMITED_STATUS_CODES, true)) {
@@ -137,12 +174,14 @@ if ($contentType !== null && $contentType -> isImage()) {
     $image = ImageLoader::load($imageData, $item -> itemId);
 
     if ($image === null) {
-        // Content-Type claimed image/*, but imagecreatefromstring() couldn't
-        // actually decode it (an SVG, a corrupt file, a format GD doesn't
-        // support) - it isn't a usable image, so there's nothing to keep,
-        // same reasoning as deleting an unrecoverable redirect.
+        // Content-Type claimed image/*, but ImageLoader::load() couldn't turn
+        // it into a usable thumbnail - either it wasn't decodable at all (an
+        // SVG, a corrupt file, a format GD doesn't support) or its dimensions
+        // ruled it out (a decompression bomb, or too small to be more than a
+        // tracking pixel/spacer/decorative icon). Either way there's nothing
+        // to keep, same reasoning as deleting an unrecoverable redirect.
         $item -> delete();
-        echo "Couldn't decode image, deleted this item.\n";
+        echo "Couldn't use image (undecodable or unusable dimensions), deleted this item.\n";
         exit(0);
     }
 

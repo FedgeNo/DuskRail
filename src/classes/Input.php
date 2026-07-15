@@ -9,11 +9,16 @@ class Input extends HTMLVoidElement
     public ?string $name = null;
     public ?string $value = null;
     public ?string $placeholder = null;
+    public bool $checked = false;
 
     public function toDOM(): \DOMElement
     {
         if ($this -> type !== null) {
             $this -> attributes['type'] = $this -> type;
+        }
+
+        if ($this -> checked) {
+            $this -> attributes['checked'] = 'checked';
         }
 
         if ($this -> name !== null) {

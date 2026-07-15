@@ -26,6 +26,18 @@ class URL
         'yclid', 'mkt_tok',
     ];
 
+    // A query string on a URL that already ends in a real image extension is
+    // almost never part of the resource's identity - it's a cache-buster
+    // (?v=..., a timestamp) or a resize/format hint (?w=300, ?quality=80) the
+    // same underlying image gets served under constantly, and keeping it
+    // would crawl and store the same picture over and over under "different"
+    // URLs. This is deliberately keyed off having a recognized extension
+    // already in the path, not applied to every URL - a dynamic image
+    // endpoint that has no extension at all (e.g. "/getimage.php?id=123",
+    // where the query string *is* the only identifier) is left completely
+    // alone.
+    private const IMAGE_EXTENSIONS = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg', 'avif', 'ico', 'tif', 'tiff'];
+
     public string $scheme;
     public string $host;
     public ?int $port;
@@ -52,6 +64,17 @@ class URL
         $this -> scheme = strtolower($parts['scheme'] ?? '');
         $this -> host = strtolower($parts['host'] ?? '');
 
+        // It's 2026 - a host with no HTTPS at all is rare enough that it's
+        // not worth carrying "http" as a second, separate identity for the
+        // same page forever. Forced before the port default below is
+        // resolved, so a bare "http://host/" (no explicit port) correctly
+        // defaults to 443, not 80. If the host genuinely can't do HTTPS, the
+        // connection just fails outright and the item gets deleted like any
+        // other unrecoverable failure - not retried under a different scheme.
+        if ($this -> scheme === 'http') {
+            $this -> scheme = 'https';
+        }
+
         $this -> pathGiven = isset($parts['path']) && $parts['path'] !== '';
         $this -> path = $this -> pathGiven ? self::encodePath($parts['path']) : '/';
 
@@ -69,6 +92,10 @@ class URL
             foreach (self::TRACKING_PARAMETERS as $trackingParameter) {
                 unset($this -> queryParameters[$trackingParameter]);
             }
+        }
+
+        if (self::isImagePath($this -> path)) {
+            $this -> queryParameters = [];
         }
 
         // Canonical query parameter order - two URLs differing only in query
@@ -173,6 +200,10 @@ class URL
             }
         }
 
+        if (self::isImagePath($result -> path)) {
+            $result -> queryParameters = [];
+        }
+
         $result -> pathGiven = true;
         $result -> queryGiven = $result -> queryParameters !== [];
 
@@ -206,6 +237,11 @@ class URL
             static fn (array $match): string => rawurlencode($match[0]),
             $path
         );
+    }
+
+    private static function isImagePath(string $path): bool
+    {
+        return in_array(strtolower(pathinfo($path, PATHINFO_EXTENSION)), self::IMAGE_EXTENSIONS, true);
     }
 
     /**
