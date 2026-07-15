@@ -33,7 +33,7 @@ class URL
         $this -> host = strtolower($parts['host'] ?? '');
 
         $this -> pathGiven = isset($parts['path']) && $parts['path'] !== '';
-        $this -> path = $this -> pathGiven ? $parts['path'] : '/';
+        $this -> path = $this -> pathGiven ? self::encodePath($parts['path']) : '/';
 
         // Always resolved to a real port number (falling back to the scheme's
         // default) rather than left null - callers that need to actually open
@@ -67,6 +67,25 @@ class URL
     public function isValid(): bool
     {
         return in_array($this -> scheme, ['http', 'https'], true) && $this -> host !== '';
+    }
+
+    /**
+     * Whether this looks like an OAuth2/OIDC authorization endpoint (a
+     * "sign in with..." link) rather than real content - client_id +
+     * redirect_uri + response_type together is essentially unique to that
+     * flow (it's the standard OAuth2 authorization-request parameter set),
+     * so this doesn't need to guess at path conventions ("/login", "/auth",
+     * "/openid-connect/..." vary by provider and "/login" alone is too
+     * generic to safely rule out real content). These URLs are also a real
+     * crawl trap: many providers mint a fresh, single-use "state" parameter
+     * per request, so the "same" login link looks like a new, never-seen
+     * URL every single time a page links to it.
+     */
+    public function isLikelyOAuthURL(): bool
+    {
+        return isset($this -> queryParameters['client_id'])
+            && isset($this -> queryParameters['redirect_uri'])
+            && isset($this -> queryParameters['response_type']);
     }
 
     public function toString(): string
@@ -141,6 +160,28 @@ class URL
         $result -> port ??= self::DEFAULT_PORTS[$result -> scheme] ?? null;
 
         return $result;
+    }
+
+    /**
+     * Percent-encodes anything in a path that isn't valid there raw -
+     * crawled markup routinely has an unencoded space or other character in
+     * an href/src (a real one broke this exact class: a raw space in the
+     * path meant the HTTP request line itself was malformed, and the server
+     * never sent back a response at all - not an error status, no response
+     * whatsoever). "+" is only a query-string convention (form-urlencoded
+     * data); in a path it's just a literal plus sign, so this always uses
+     * "%20" for a space, never "+". Leaves already-valid percent-encoded
+     * sequences (%XX) alone rather than re-encoding their "%" into "%25" -
+     * the first alternative only matches a "%" that ISN'T followed by two
+     * hex digits, i.e. one that's actually raw, not part of an existing escape.
+     */
+    private static function encodePath(string $path): string
+    {
+        return preg_replace_callback(
+            '/%(?![0-9A-Fa-f]{2})|[^A-Za-z0-9\-._~!$&\'()*+,;=:@\/%]/',
+            static fn (array $match): string => rawurlencode($match[0]),
+            $path
+        );
     }
 
     /**

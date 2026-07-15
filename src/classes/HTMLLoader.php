@@ -236,7 +236,7 @@ class HTMLLoader
      */
     public static function extractMetadata(\DOMDocument $document): array
     {
-        $title = $document -> getElementsByTagName('title') -> item(0)?->textContent;
+        $title = $document -> getElementsByTagName('title') -> item(0) ?-> textContent;
         $title = self::firstNonEmpty([$title, self::metaContent($document, 'property', 'og:title'), self::metaContent($document, 'name', 'twitter:title')]);
 
         $description = self::firstNonEmpty([
@@ -295,7 +295,7 @@ class HTMLLoader
         // out literally everything rather than just chrome around the edges.
         foreach (iterator_to_array($xpath -> query('//*[@class or @id][not(self::html)][not(self::body)]')) as $element) {
             if (self::isBoilerplateElement($element)) {
-                $element -> parentNode?->removeChild($element);
+                $element -> parentNode ?-> removeChild($element);
             }
         }
     }
@@ -354,7 +354,7 @@ class HTMLLoader
     private static function removeElements(\DOMNodeList $elements): void
     {
         foreach (iterator_to_array($elements) as $element) {
-            $element -> parentNode?->removeChild($element);
+            $element -> parentNode ?-> removeChild($element);
         }
     }
 
@@ -369,7 +369,7 @@ class HTMLLoader
     {
         $body = $document -> getElementsByTagName('body') -> item(0);
 
-        return self::normalizeWhitespace($body?->textContent ?? '');
+        return self::normalizeWhitespace($body ?-> textContent ?? '');
     }
 
     /**

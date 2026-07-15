@@ -104,7 +104,14 @@ if ($contentType !== null && $contentType -> isImage()) {
 }
 
 if ($contentType === null || !$contentType -> isHTML()) {
-    echo "Not HTML, nothing more to do yet.\n";
+    // Not something this crawler knows how to turn into presentable content
+    // yet (a PDF, plain text, a connection that returned no Content-Type at
+    // all, ...) - deleting rather than leaving crawledTime NULL is what
+    // keeps this from being handed back by nextToCrawl() and retried forever
+    // with the same non-result every single run.
+    $connection -> readBody();
+    $item -> delete();
+    echo 'Not HTML (' . ($contentType ?-> type ?? 'no response') . "), deleted this item.\n";
     exit(0);
 }
 
@@ -125,6 +132,14 @@ echo 'Saved ' . count($images) . " images.\n";
 $anchorLinks = HTMLLoader::extractAnchorLinks($document, $baseURL);
 
 foreach ($anchorLinks as $link) {
+    // A "sign in with..." link, not real content - and often a crawl trap,
+    // since some providers mint a fresh single-use "state" param per
+    // request, making the same login link look like a brand new URL every
+    // time it's encountered. Never even worth creating an item for.
+    if ($link['url'] -> isLikelyOAuthURL()) {
+        continue;
+    }
+
     // "unknown" rather than a guess like images get "image" - a href can
     // point at absolutely anything (another page, a PDF, an image), and
     // there's no equivalent to "found via <img>" telling us which.

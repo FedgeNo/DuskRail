@@ -23,6 +23,7 @@ A search engine (crawler, index, and search interface) built from the ground up.
 - DB access via mysqli (`Database::connection()`), not PDO.
 - Every PHP file starts with `declare(strict_types=1);`.
 - Comments explain *why*, not what — used for non-obvious constraints/decisions, not restating the code.
+- Spaces around `->` and `?->`: `$this -> property`, `$foo -> bar()`, `$foo ?-> bar`. Applies everywhere, no exceptions for short chains.
 
 ## Crawler conventions
 
