@@ -26,7 +26,7 @@ A search engine (crawler, index, and search interface) built from the ground up.
 
 ## Crawler conventions
 
-- `crawledTime` being non-`NULL` means "this item is real, presentable content" - never stamp it on an item the crawler couldn't actually turn into something worth showing a search result for. If crawling something fails in a way that leaves nothing usable (an undecodable image, a redirect that couldn't be resolved to anything, a broken/looping redirect), delete the item instead of marking it crawled with empty/null fields.
+- `crawledTime` being non-`NULL` means "this item is real, presentable content" - never stamp it on an item the crawler couldn't actually turn into something worth showing a search result for. If crawling something fails in a way that leaves nothing usable (an undecodable image, a redirect that couldn't be resolved to anything, a broken/looping redirect, a non-2xx status code), delete the item instead of marking it crawled with empty/null/error-page fields.
 
 ## SQL conventions
 
