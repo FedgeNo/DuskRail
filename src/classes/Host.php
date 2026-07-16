@@ -106,11 +106,18 @@ UPDATE `Hosts`
         $connection = new HTTPConnection(new URL($scheme . '://' . $this -> host . '/robots.txt'));
         $body = $connection -> readBody();
 
+        // This is a real request against this host, same as fetching the
+        // page itself - without recording it here, first contact with a
+        // never-before-seen host would fire this request and the page
+        // request immediately back to back, before any politeness cooldown
+        // ever applied.
+        $this -> recordCrawl($connection -> statusCode !== null && in_array($connection -> statusCode, [429, 503], true));
+
         // A missing/erroring robots.txt (very common - most sites 404 it)
         // means "no restrictions declared", cached as an empty string
         // rather than left null - null is what triggers a re-fetch here,
         // and an empty string means "already checked, nothing there".
-        $this -> robotsTxt = ($connection -> statusCode >= 200 && $connection -> statusCode < 300) ? $body : '';
+        $this -> robotsTxt = ($connection -> statusCode !== null && $connection -> statusCode >= 200 && $connection -> statusCode < 300) ? $body : '';
 
         $update = mysqli_prepare(Database::connection(), '
 UPDATE `Hosts`
