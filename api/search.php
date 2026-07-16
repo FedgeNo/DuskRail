@@ -91,9 +91,10 @@ SELECT `itemId`, `url`, `type`, `title`, `description`,
     return mysqli_fetch_all(mysqli_stmt_get_result($select), MYSQLI_ASSOC);
 }
 
+// Already in linkMatches DESC, relevance DESC order - both queries' own
+// ORDER BY already did this server-side, so there's nothing left to sort
+// here.
 $rows = $type === 'image' ? search_images($connection, $query, $offset) : search_html($connection, $query, $offset);
-
-usort($rows, fn (array $a, array $b) => $b['linkMatches'] <=> $a['linkMatches'] ?: $b['relevance'] <=> $a['relevance']);
 
 $hasMore = count($rows) > PAGE_SIZE;
 $rows = array_slice($rows, 0, PAGE_SIZE);

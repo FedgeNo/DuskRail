@@ -134,24 +134,39 @@ $env_example_path = ROOT_DIR . '/.env.example';
 if (is_file($env_path)) {
     ok('.env already exists, leaving it alone');
 } else {
-    $defaults = [
-        'DB_HOST' => '127.0.0.1',
-        'DB_PORT' => '3306',
-        'DB_DATABASE' => 'duskrail',
-        'DB_USERNAME' => 'duskrail',
-        'DB_PASSWORD' => 'change-me',
-    ];
+    // .env.example is the single source of truth for which keys .env needs
+    // and their defaults - reading it here (rather than a separate hardcoded
+    // list) means a key added to .env.example is automatically written to a
+    // fresh .env too, instead of silently defaulting at read time
+    // (Env::get()'s own fallback) without ever actually appearing in the
+    // file a user would look at to configure it.
+    $defaults = [];
 
-    $answers = [
-        'DB_HOST' => prompt('Database host', $defaults['DB_HOST']),
-        'DB_PORT' => prompt('Database port', $defaults['DB_PORT']),
-        'DB_DATABASE' => prompt('Database name', $defaults['DB_DATABASE']),
-        'DB_USERNAME' => prompt('Database username', $defaults['DB_USERNAME']),
-        'DB_PASSWORD' => prompt('Database password', $defaults['DB_PASSWORD']),
+    foreach (file($env_example_path, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) as $line) {
+        $line = trim($line);
+
+        if ($line === '' || str_starts_with($line, '#') || !str_contains($line, '=')) {
+            continue;
+        }
+
+        [$key, $value] = explode('=', $line, 2);
+        $defaults[trim($key)] = trim($value);
+    }
+
+    // Only these are worth an interactive prompt - the rest (SITE_URL,
+    // SITE_TITLE, ...) are fine taking .env.example's default straight
+    // through, same as they always have via Env::get()'s fallback.
+    $prompts = [
+        'DB_HOST' => 'Database host',
+        'DB_PORT' => 'Database port',
+        'DB_DATABASE' => 'Database name',
+        'DB_USERNAME' => 'Database username',
+        'DB_PASSWORD' => 'Database password',
     ];
 
     $lines = [];
-    foreach ($answers as $key => $value) {
+    foreach ($defaults as $key => $default) {
+        $value = isset($prompts[$key]) ? prompt($prompts[$key], $default) : $default;
         $lines[] = $key . '=' . $value;
     }
 
@@ -237,6 +252,14 @@ FLUSH PRIVILEGES
 
     ok('Created database "' . $database_name . '" and user "' . $database_user . '"');
 }
+
+// mysqli_report() is a script-wide setting, not scoped to the $connection
+// above - restored to PHP's own default here so the schema-delta code below
+// (which calls into app classes like Host::findOrCreateByName() that assume
+// mysqli throws on error, same as everywhere else in this project) gets its
+// normal error handling back rather than silently swallowing failures for
+// the rest of this run.
+mysqli_report(MYSQLI_REPORT_ERROR | MYSQLI_REPORT_STRICT);
 
 // ---------- Schema ----------
 //

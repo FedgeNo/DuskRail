@@ -43,7 +43,7 @@ class HTTPConnection
             // robots.txt fetch came back as raw gzip bytes, which then
             // failed to insert as invalid UTF-8). An empty string means
             // "accept and auto-decode every encoding curl was built with"
-            // (gzip, deflate, br, ...), so the body handed to $this->body is
+            // (gzip, deflate, br, ...), so the body handed to $this -> body is
             // always the real decompressed content either way.
             CURLOPT_ENCODING => '',
             CURLOPT_HEADERFUNCTION => $this -> onHeaderLine(...),
