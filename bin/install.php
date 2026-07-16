@@ -541,6 +541,18 @@ INSERT INTO `Migrations` (`name`)
     }
 }
 
+// ---------- TLD list ----------
+//
+// URL::isValid() requires a real, currently-delegated TLD (see TLDs) and
+// refuses to crawl anything without one - fetched here too, not just lazily
+// on first use, so a freshly cloned install can start crawling right away
+// instead of the very first URL::isValid() call silently failing everything
+// closed because no cache exists yet.
+
+heading('Fetching TLD list');
+TLDs::warm();
+ok('TLD list ready');
+
 // ---------- Web server ----------
 //
 // Apache vhost + SELinux/ACL setup can't be done by this script itself (it

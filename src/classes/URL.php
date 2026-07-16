@@ -114,10 +114,27 @@ class URL
      * link/img tag produced it) rather than use it any further once this is
      * false - a crawler that tried to fetch every href verbatim would end up
      * "GET"-ing mailto: addresses and JS snippets.
+     *
+     * Also requires a real, currently-delegated TLD (see TLDs) - this
+     * project's whole approach to SSRF hardening in one move: no IP literal
+     * (IPv4, or IPv6 - parse_url keeps IPv6's brackets, e.g. "[::1]", which
+     * still has no dot-separated label to match) ever has a real TLD as its
+     * last label, so this alone rejects a page linking the crawler at
+     * "http://127.0.0.1/", a cloud metadata endpoint
+     * ("http://169.254.169.254/..."), or an internal address, along with
+     * single-label internal hostnames ("http://fileserver/") and made-up
+     * internal-only suffixes ("http://app.corp/", "http://db.local/") -
+     * without needing a separate, dedicated IP-literal check at all.
      */
     public function isValid(): bool
     {
-        return in_array($this -> scheme, ['http', 'https'], true) && $this -> host !== '';
+        if (!in_array($this -> scheme, ['http', 'https'], true) || $this -> host === '') {
+            return false;
+        }
+
+        $lastDot = strrpos($this -> host, '.');
+
+        return $lastDot !== false && TLDs::isValid(substr($this -> host, $lastDot + 1));
     }
 
     /**
