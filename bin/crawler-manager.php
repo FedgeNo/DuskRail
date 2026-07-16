@@ -187,6 +187,21 @@ while (true) {
                     fwrite(STDERR, '[' . $slot . '] itemId ' . $stuckItemId . ' hung ' . MAX_HANGS_PER_ITEM . " times in a row, deleted.\n");
                 }
             }
+        } else {
+            // Normal (non-timeout) exit: whatever item this slot just finished
+            // (crawled, deleted, redirected away, or skipped) is no longer
+            // stuck, so drop its hang counter. Without this a one-off earlier
+            // hang would linger forever, and - worse - a later unrelated hang
+            // could tip an item that actually succeeded in between over the
+            // deletion threshold. An empty file (this run found nothing to
+            // crawl, see bin/crawler.php) reads as 0 and is skipped, leaving a
+            // genuinely-hung item's count intact rather than resetting it.
+            $currentItemFile = CURRENT_CRAWL_ITEM_FILE . '-' . $slot;
+            $finishedItemId = is_file($currentItemFile) ? (int) file_get_contents($currentItemFile) : 0;
+
+            if ($finishedItemId > 0) {
+                unset($hangCounts[$finishedItemId]);
+            }
         }
 
         flush_buffer($slot, $worker['outBuffer'], STDOUT);

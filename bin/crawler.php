@@ -60,6 +60,13 @@ $topic = is_file(CRAWL_TOPIC_FILE) ? trim(file_get_contents(CRAWL_TOPIC_FILE)) :
 $item = Item::nextToCrawl($topic !== '' ? $topic : null);
 
 if ($item === null) {
+    // Clear this slot's "what am I working on" file - this run touched no
+    // item, so it must not leave a previous run's itemId sitting there for
+    // bin/crawler-manager.php to misread as "the item this slot just
+    // finished" and wrongly reset that item's hang counter (which, for an
+    // item that reliably hangs while it's the only thing left in the queue,
+    // would stop it ever reaching the 3-strikes deletion).
+    file_put_contents($currentItemFile, '');
     echo "Nothing to crawl.\n";
     exit(0);
 }
