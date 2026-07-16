@@ -3,7 +3,10 @@
     var button = document.getElementById('search-button');
     var status = document.getElementById('status');
     var results = document.getElementById('results');
+    var preview = document.getElementById('preview');
     var typeInputs = document.getElementsByName('result-type');
+
+    var PREVIEW_PLACEHOLDER = 'Select an image to preview it here.';
 
     // Infinite-scroll state for the in-progress search - reset at the start
     // of every new search() call so a fresh query/type never appends onto a
@@ -17,6 +20,8 @@
     var tileAspectRatios = [];
     var hasMore = false;
     var loadingMore = false;
+    var selectedTile = null;
+    var previewToken = 0;
 
     function selectedType() {
         for (var i = 0; i < typeInputs.length; i++) {
@@ -93,12 +98,15 @@
         });
     }
 
+    // A div, not an anchor - clicking an image tile loads it into the
+    // preview column instead of navigating away (see showPreview()); the
+    // parent page and the image itself are both still reachable as links
+    // from within the preview once it loads.
     function buildImageTile(result, aspectRatio) {
-        var tile = document.createElement('a');
+        var tile = document.createElement('div');
         tile.className = 'image-tile';
-        tile.href = result.url;
-        tile.target = '_blank';
-        tile.rel = 'noopener noreferrer';
+        tile.tabIndex = 0;
+        tile.setAttribute('role', 'button');
 
         if (result.thumbnailUrl) {
             var thumb = document.createElement('img');
@@ -120,7 +128,134 @@
 
         tile.dataset.aspectRatio = aspectRatio;
 
+        tile.addEventListener('click', function () {
+            selectTile(tile, result.itemId);
+        });
+
+        tile.addEventListener('keydown', function (event) {
+            if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault();
+                selectTile(tile, result.itemId);
+            }
+        });
+
         return tile;
+    }
+
+    function selectTile(tile, itemId) {
+        if (selectedTile) {
+            selectedTile.classList.remove('selected');
+        }
+
+        selectedTile = tile;
+        tile.classList.add('selected');
+        showPreview(itemId);
+    }
+
+    function clearPreview() {
+        while (preview.firstChild) {
+            preview.removeChild(preview.firstChild);
+        }
+    }
+
+    function resetPreview() {
+        previewToken++; // invalidates any showPreview() request still in flight
+
+        if (selectedTile) {
+            selectedTile.classList.remove('selected');
+            selectedTile = null;
+        }
+
+        clearPreview();
+        preview.textContent = PREVIEW_PLACEHOLDER;
+    }
+
+    // Shows the thumbnail immediately, scaled up to fill the preview column
+    // (it's already on hand, no extra request) - then loads the real
+    // full-size image in the background and swaps it in once it's actually
+    // ready, same progressive-load feel as Google Images' preview panel.
+    // If the full image fails to load (dead link, since crawled), the
+    // thumbnail is left in place rather than showing nothing.
+    function showPreview(itemId) {
+        var thisRequest = ++previewToken;
+
+        clearPreview();
+        preview.textContent = 'Loading...';
+
+        fetch('/api/item.php?itemId=' + encodeURIComponent(itemId))
+            .then(function (response) { return response.json(); })
+            .then(function (item) {
+                // The user may have clicked a different tile (or started a
+                // new search) while this was in flight - a stale response
+                // landing late must not overwrite whatever's now selected.
+                if (thisRequest !== previewToken) {
+                    return;
+                }
+
+                clearPreview();
+
+                var image = document.createElement('img');
+                image.className = 'preview-image';
+
+                if (item.thumbnailUrl) {
+                    image.src = item.thumbnailUrl;
+                }
+
+                preview.appendChild(image);
+
+                if (item.url) {
+                    var fullImage = new Image();
+                    fullImage.onload = function () {
+                        image.src = item.url;
+                    };
+                    fullImage.src = item.url;
+                }
+
+                if (item.title) {
+                    var title = document.createElement('div');
+                    title.className = 'preview-title';
+                    title.textContent = item.title;
+                    preview.appendChild(title);
+                }
+
+                if (item.description) {
+                    var description = document.createElement('div');
+                    description.className = 'preview-description';
+                    description.textContent = item.description;
+                    preview.appendChild(description);
+                }
+
+                if (item.parentUrl) {
+                    var parentLine = document.createElement('div');
+                    parentLine.className = 'preview-parent';
+                    parentLine.appendChild(document.createTextNode('From: '));
+
+                    var parentLink = document.createElement('a');
+                    parentLink.href = item.parentUrl;
+                    parentLink.target = '_blank';
+                    parentLink.rel = 'noopener noreferrer';
+                    parentLink.textContent = shortenUrl(item.parentUrl);
+                    parentLine.appendChild(parentLink);
+
+                    preview.appendChild(parentLine);
+                }
+
+                var imageLink = document.createElement('a');
+                imageLink.className = 'preview-image-link';
+                imageLink.href = item.url;
+                imageLink.target = '_blank';
+                imageLink.rel = 'noopener noreferrer';
+                imageLink.textContent = 'Open full image';
+                preview.appendChild(imageLink);
+            })
+            .catch(function () {
+                if (thisRequest !== previewToken) {
+                    return;
+                }
+
+                clearPreview();
+                preview.textContent = 'Could not load preview.';
+            });
     }
 
     // Packs tiles into rows at a shared height, scaled by each image's own
@@ -285,6 +420,7 @@
         tileAspectRatios = [];
         hasMore = false;
         loadingMore = false;
+        resetPreview();
 
         if (query === '') {
             clearResults();

@@ -8,6 +8,9 @@ $query = trim((string) ($_GET['q'] ?? ''));
 
 $page = Page::create($query !== '' ? $query : 'Home');
 
+$layout = new Div();
+$layout -> class = 'layout';
+
 $container = new Div();
 $container -> class = 'search-page';
 
@@ -77,7 +80,19 @@ $results = new Div();
 $results -> id = 'results';
 $container -> addContent($results);
 
-$page -> addContent($container);
+$layout -> addContent($container);
+
+// Populated by search.js when an image result is clicked - placeholder text
+// server-rendered here rather than left truly empty, since
+// HTMLObject::fillEmptyNonVoidTags() would inject an empty text node into a
+// genuinely-empty div anyway (defeating a CSS :empty-based placeholder).
+$preview = new Div();
+$preview -> id = 'preview';
+$preview -> class = 'preview-column';
+$preview -> addContent('Select an image to preview it here.');
+$layout -> addContent($preview);
+
+$page -> addContent($layout);
 
 $script = new Script();
 $script -> src = ServerURL::absolute('/search.js');
