@@ -4,9 +4,7 @@ A search engine (crawler, index, and search interface) built from the ground up.
 
 ## Working rules
 
-- Do not use the advisor tool ("consult") on this project.
-- Do not use the Workflow tool (multi-agent orchestration) on this project.
-- Do not spawn multiple subagents/agents in parallel unless the user explicitly asks for it. Work directly, one model/session at a time.
+- Never delegate work on this project: no advisor tool ("consult"), no Workflow tool (multi-agent orchestration), no Agent tool/subagents of any kind (not even a single one, not even sequentially) — regardless of how the user phrases the request. Do the work directly yourself, one model/session at a time.
 - Never use the AskUserQuestion pop-up tool, for any reason, including to offer multiple-choice options or to confirm an approach before implementing it. This has been violated before. Ask clarifying questions as plain text in the conversation instead, always.
 - Never use the persistent memory system (no memory files, no MEMORY.md entries). This CLAUDE.md is the only durable record of working rules and project context — keep it up to date instead.
 - `bin/install.php` must mirror every environment-changing setup step taken on the dev machine (directories, .env/config, database creation/users, schema, Apache/vhost config, package installs, etc.) so the project can be stood up from scratch on a fresh box. Update it in the same step as making the change, not after the fact.
