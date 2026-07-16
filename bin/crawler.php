@@ -118,6 +118,7 @@ for ($hop = 0; in_array($connection -> statusCode, REDIRECT_STATUS_CODES, true);
         exit(0);
     }
 
+    $previousItemId = $item -> itemId;
     $item = $item -> redirectTo($redirectTarget);
     echo 'Redirected to: ' . $item -> url . ' (itemId ' . $item -> itemId . ")\n";
 
@@ -125,6 +126,26 @@ for ($hop = 0; in_array($connection -> statusCode, REDIRECT_STATUS_CODES, true);
         echo "Redirect target already crawled, nothing more to do.\n";
         exit(0);
     }
+
+    // redirectTo() may have handed back a *different*, pre-existing item (its
+    // target URL already existed as its own row) - this worker only ever
+    // claimed the item nextToCrawl() gave it, not this one, so another worker
+    // could already be crawling it. Re-claim before continuing; losing that
+    // race means the other worker owns it and this one bows out rather than
+    // fetching the same URL a second time. A same-row redirect (the target
+    // URL was new, so the itemId is unchanged) still holds its original claim
+    // and must NOT re-claim - claim() would fail against its own live claim.
+    if ($item -> itemId !== $previousItemId && !$item -> reclaim()) {
+        echo "Redirect target already claimed by another worker, leaving it to them.\n";
+        exit(0);
+    }
+
+    // Repoint the hang-tracking file at the item actually being worked on now:
+    // a redirect onto a pre-existing item changes the itemId, and redirectTo()
+    // has already deleted the original row, so a hang here would otherwise be
+    // blamed on (and its 3-strikes deletion aimed at) an item that no longer
+    // exists instead of the redirect target that's actually stuck.
+    file_put_contents($currentItemFile, (string) $item -> itemId);
 
     $pageURL = new URL($item -> url);
     $host = hostFor($pageURL);

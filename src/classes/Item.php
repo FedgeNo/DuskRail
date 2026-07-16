@@ -161,6 +161,19 @@ SELECT `Items`.*
     }
 
     /**
+     * Claims this item the same way nextToCrawl() does, for the case where a
+     * worker ends up holding an item it never went through nextToCrawl() to
+     * get - specifically a redirect that lands on a pre-existing item (see
+     * redirectTo() and bin/crawler.php's redirect loop). Returns false if
+     * another worker already holds a live claim on it, so the caller can bow
+     * out rather than double-crawl the same URL.
+     */
+    public function reclaim(): bool
+    {
+        return self::claim($this -> itemId);
+    }
+
+    /**
      * Atomically reserves $itemId for CLAIM_WINDOW_SECONDS - the WHERE here
      * re-checks the same claimedUntil condition selectCandidateRow() already
      * filtered on, so this UPDATE only actually claims the row (affected
