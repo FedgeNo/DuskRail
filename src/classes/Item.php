@@ -313,7 +313,7 @@ UPDATE `Items`
             $this -> hostId = $newHostId;
 
             return $this;
-        } catch (\mysqli_sql_exception $exception) {
+        } catch (\mysqli_sql_exception) {
             $this -> delete();
 
             $select = mysqli_prepare($connection, '
