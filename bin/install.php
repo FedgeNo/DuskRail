@@ -585,5 +585,59 @@ sudo apachectl configtest && sudo systemctl reload httpd
 
 SHELL;
 
+// ---------- Crawler service ----------
+//
+// A systemd service that runs bin/crawler-manager.php as apache. Same as the
+// vhost above, this needs root so it's printed rather than run. Deliberately
+// left disabled (no boot-start) and stopped - it's started by hand.
+
+heading('Crawler service (run manually, needs sudo)');
+echo <<<'SHELL'
+sudo tee /etc/systemd/system/duskrail-crawler.service > /dev/null <<'EOF'
+[Unit]
+Description=DuskRail crawler manager (supervises bin/crawler.php workers)
+After=network-online.target mariadb.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=apache
+Group=apache
+WorkingDirectory=/path/to/DuskRail
+ExecStart=/usr/bin/php /path/to/DuskRail/bin/crawler-manager.php
+# SIGTERM to the manager alone (not the whole cgroup) so it can drain workers
+# gracefully - it stops spawning and exits once every in-flight worker has
+# finished its current item (crawler.php ignores SIGTERM). Anything still
+# alive after TimeoutStopSec is SIGKILLed as a backstop.
+KillMode=mixed
+TimeoutStopSec=120
+Restart=no
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# The manager runs as apache; its workers write thumbnails, the TLD cache
+# (data/), and one crawler-current-item-N per worker slot (WORKER_COUNT in
+# bin/crawler-manager.php, currently 5). Grant apache write to exactly those:
+# DAC via ACL (keeps its existing ownership, so manual `php bin/crawler-manager.php`
+# runs as the owner still work) and MAC via the httpd_sys_rw_content_t label, the
+# same label crawl-topic already carries.
+for n in 0 1 2 3 4; do : > /path/to/DuskRail/crawler-current-item-$n; done
+sudo setfacl -R -m u:apache:rwX -m d:u:apache:rwX /path/to/DuskRail/thumbnails /path/to/DuskRail/data
+for n in 0 1 2 3 4; do sudo setfacl -m u:apache:rw /path/to/DuskRail/crawler-current-item-$n; done
+sudo semanage fcontext -a -t httpd_sys_rw_content_t "/path/to/DuskRail/thumbnails(/.*)?"
+sudo semanage fcontext -a -t httpd_sys_rw_content_t "/path/to/DuskRail/data(/.*)?"
+sudo semanage fcontext -a -t httpd_sys_rw_content_t "/path/to/DuskRail/crawler-current-item.*"
+sudo restorecon -Rv /path/to/DuskRail/thumbnails /path/to/DuskRail/data
+for n in 0 1 2 3 4; do sudo restorecon /path/to/DuskRail/crawler-current-item-$n; done
+sudo systemctl daemon-reload
+
+# Left disabled (no boot-start) and stopped on purpose - drive it by hand:
+#   sudo systemctl start duskrail-crawler
+#   sudo systemctl stop duskrail-crawler     # graceful: workers finish first
+
+SHELL;
+
 heading('Done');
 echo "DuskRail is set up.\n";
