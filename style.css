@@ -29,16 +29,15 @@ body {
     padding: 0 1.5rem 0 1rem;
 }
 /* Bootstrap's reboot leaves the fieldset borderless already; this just tames
-   its oversized default legend down to a compact group label for the search
-   controls. */
-.search-fields {
+   its oversized default legend down to a compact label for the radio group. */
+.result-type {
     min-width: 0;
 }
-.search-fields legend {
+.result-type legend {
     float: none;
     width: auto;
-    margin-bottom: 0.5rem;
-    font-size: 1rem;
+    margin-bottom: 0.35rem;
+    font-size: 0.85rem;
     font-weight: 600;
     color: #adb5bd;
 }
