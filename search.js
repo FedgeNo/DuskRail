@@ -10,14 +10,12 @@
 
     // Infinite-scroll state for the in-progress search - reset at the start
     // of every new search() call so a fresh query/type never appends onto a
-    // previous one's results. tileAspectRatios stays parallel to loadedItems
-    // (same indices) since the image grid re-lays-out from scratch on every
-    // page - the packing algorithm needs every tile's aspect ratio together,
-    // not just the newly-loaded page's.
+    // previous one's results. loadedItems is kept only for the running result
+    // count (each image page lays itself out and is appended independently,
+    // so nothing needs the full list of tiles held together anymore).
     var currentQuery = '';
     var currentType = 'html';
     var loadedItems = [];
-    var tileAspectRatios = [];
     var hasMore = false;
     var loadingMore = false;
     var selectedTile = null;
@@ -390,15 +388,19 @@
                         return;
                     }
 
-                    dimensions.forEach(function (dimension) {
-                        tileAspectRatios.push(dimension.width / dimension.height);
-                    });
+                    if (!append) {
+                        clearResults();
+                        results.className = 'image-grid';
+                    }
 
-                    clearResults();
-                    results.className = 'image-grid';
-
-                    var tiles = loadedItems.map(function (result, index) {
-                        return buildImageTile(result, tileAspectRatios[index]);
+                    // Lay out only this page's tiles and append them as their
+                    // own justified rows below whatever's already there -
+                    // earlier pages keep their existing layout rather than
+                    // being torn down and re-flowed on every load. Each page
+                    // justifies independently, so its last (partial) row stays
+                    // at the target height and the next page starts fresh.
+                    var tiles = items.map(function (result, index) {
+                        return buildImageTile(result, dimensions[index].width / dimensions[index].height);
                     });
 
                     layoutJustifiedGrid(results, tiles, 180, 8);
@@ -417,7 +419,6 @@
         currentQuery = query;
         currentType = selectedType();
         loadedItems = [];
-        tileAspectRatios = [];
         hasMore = false;
         loadingMore = false;
         resetPreview();
