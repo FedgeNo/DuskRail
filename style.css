@@ -28,6 +28,20 @@ body {
     margin: 3rem 0;
     padding: 0 1.5rem 0 1rem;
 }
+/* Bootstrap's reboot leaves the fieldset borderless already; this just tames
+   its oversized default legend down to a compact group label for the search
+   controls. */
+.search-fields {
+    min-width: 0;
+}
+.search-fields legend {
+    float: none;
+    width: auto;
+    margin-bottom: 0.5rem;
+    font-size: 1rem;
+    font-weight: 600;
+    color: #adb5bd;
+}
 .preview-column {
     width: 40vw;
     box-sizing: border-box;

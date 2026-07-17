@@ -1,6 +1,6 @@
 (function () {
+    var form = document.getElementById('search-form');
     var input = document.getElementById('query-input');
-    var button = document.getElementById('search-button');
     var status = document.getElementById('status');
     var results = document.getElementById('results');
     var preview = document.getElementById('preview');
@@ -439,12 +439,13 @@
         search(query);
     }
 
-    button.addEventListener('click', submit);
-
-    input.addEventListener('keydown', function (event) {
-        if (event.key === 'Enter') {
-            submit();
-        }
+    // One submit handler covers both paths - clicking the (type=submit) button
+    // and pressing Enter in the query field both fire the form's submit event.
+    // preventDefault keeps the browser from actually navigating to ?q=... and
+    // reloading; the AJAX flow and history are handled here instead.
+    form.addEventListener('submit', function (event) {
+        event.preventDefault();
+        submit();
     });
 
     for (var i = 0; i < typeInputs.length; i++) {

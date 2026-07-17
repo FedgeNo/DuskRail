@@ -14,24 +14,30 @@ $layout -> class = 'layout';
 $container = new Div();
 $container -> class = 'search-page';
 
-$searchBar = new Div();
-$searchBar -> class = 'd-flex gap-2';
+$form = new Form();
+$form -> id = 'search-form';
+// GET to this same page. search.js intercepts submit to run the AJAX flow;
+// keeping it a real form means Enter and the button both work through normal
+// form submission (and a no-JS submit still lands on ?q=... rather than doing
+// nothing at all).
+$form -> method = 'get';
+
+// Legend "Search": the query box and the Pages/Images choice are both search
+// parameters, so they share this fieldset. The submit button is a command
+// that acts on the whole form, not a parameter, so it lives outside the
+// fieldset (added to the form below it).
+$fieldset = new Fieldset();
+$fieldset -> class = 'search-fields';
+$fieldset -> addContent(new Legend('Search'));
 
 $queryInput = new Input();
 $queryInput -> id = 'query-input';
 $queryInput -> type = 'text';
+$queryInput -> name = 'q';
 $queryInput -> value = $query;
 $queryInput -> placeholder = 'Search DuskRail...';
 $queryInput -> class = 'form-control';
-$searchBar -> addContent($queryInput);
-
-$searchButton = new Button('Search');
-$searchButton -> id = 'search-button';
-$searchButton -> type = 'button';
-$searchButton -> class = 'btn btn-primary flex-shrink-0';
-$searchBar -> addContent($searchButton);
-
-$container -> addContent($searchBar);
+$fieldset -> addContent($queryInput);
 
 $typeChoice = new Div();
 $typeChoice -> class = 'mt-2 d-flex gap-3';
@@ -69,7 +75,17 @@ $imageLabel -> addContent('Images');
 $imageOption -> addContent($imageLabel);
 $typeChoice -> addContent($imageOption);
 
-$container -> addContent($typeChoice);
+$fieldset -> addContent($typeChoice);
+
+$form -> addContent($fieldset);
+
+$searchButton = new Button('Search');
+$searchButton -> id = 'search-button';
+$searchButton -> type = 'submit';
+$searchButton -> class = 'btn btn-primary mt-2';
+$form -> addContent($searchButton);
+
+$container -> addContent($form);
 
 $status = new Div();
 $status -> id = 'status';
