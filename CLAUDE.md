@@ -10,6 +10,7 @@ A search engine (crawler, index, and search interface) built from the ground up.
 - `bin/install.php` must mirror every environment-changing setup step taken on the dev machine (directories, .env/config, database creation/users, schema, Apache/vhost config, package installs, etc.) so the project can be stood up from scratch on a fresh box. Update it in the same step as making the change, not after the fact.
 - Schema changes go into `bin/install.php`'s `schema_deltas()` list as a new entry appended in the order the change was actually made (oldest first) — never edit an old delta's `apply` in place once it's shipped. Each delta needs a `check` (detects the live DB already reflects it) so re-running stays idempotent/self-healing. Update `schema.sql` alongside as the current full-schema snapshot for manual bootstrapping.
 - When stopping `bin/crawler-manager.php` (or its worker processes), give in-flight workers time to finish their current item rather than force-killing everything immediately — a mid-crawl kill wastes the work in progress. Signal the manager and wait/poll for it and its children to exit on their own before considering it stopped.
+- Passwordless `sudo` is available in this environment (no password prompt) — use it directly for system-level setup (systemd units, `semanage`/`restorecon`, `setfacl`, package installs, etc.). Every such change still has to be mirrored into `bin/install.php` per the rule above.
 
 ## Tech stack
 
