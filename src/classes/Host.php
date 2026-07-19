@@ -129,23 +129,18 @@ UPDATE `Hosts`
     }
 
     /**
-     * Whether robots.txt says not to crawl $path. Deliberately simple - a
-     * plain prefix match against every "Disallow:" line under a
-     * "User-agent: *" group - not a real robots.txt parser: no wildcards in
-     * the Disallow value itself, no Allow support/precedence. A Disallow
-     * value of "/foo" blocks "/foo", "/foo/bar", and "/foobar" alike -
-     * that's what a path prefix means here, same as the real spec. An empty
-     * Disallow value ("Disallow:" with nothing after it) means "allow
-     * everything" per the spec, so it's skipped rather than matching every
-     * path the way a naive prefix-of-"" check would.
-     *
-     * User-agent grouping specifically does matter, unlike the rest of the
-     * simplifications here - confirmed breaking real crawling otherwise: a
-     * real site's only "Disallow: /" was scoped to "User-agent: ClaudeBot"
-     * (increasingly common - many sites block AI-training bots by name
-     * while leaving general search crawling alone), and ignoring which
-     * group it belonged to made every single path on that site look
-     * disallowed to this crawler too.
+     * Whether robots.txt says not to crawl $path, per the "User-agent: *"
+     * group (the one that applies to any crawler not specifically named
+     * elsewhere in the file, which this one never is). Follows Google's
+     * documented algorithm rather than a plain prefix match: every Allow/
+     * Disallow line in that group is a pattern (a literal prefix, optionally
+     * containing "*" - matches any run of characters - and optionally ending
+     * in "$" - anchors the match to the end of the path instead of allowing
+     * anything after), and among every pattern that matches $path, the
+     * longest one (by character count of the pattern itself) wins; a tie is
+     * decided in favor of Allow, matching real crawlers' behavior on the
+     * rare robots.txt that states both at equal specificity. No path
+     * matching any rule at all is implicitly allowed.
      */
     public function isDisallowed(string $path): bool
     {
@@ -153,33 +148,54 @@ UPDATE `Hosts`
             return false;
         }
 
-        foreach (self::disallowedPrefixesForWildcardUserAgent($this -> robotsTxt) as $disallowedPrefix) {
-            if (str_starts_with($path, $disallowedPrefix)) {
-                return true;
+        $winningType = 'allow';
+        $winningLength = -1;
+
+        foreach (self::rulesForWildcardUserAgent($this -> robotsTxt) as $rule) {
+            if (!preg_match($rule['regex'], $path)) {
+                continue;
+            }
+
+            $length = strlen($rule['pattern']);
+
+            if ($length > $winningLength || ($length === $winningLength && $rule['type'] === 'allow')) {
+                $winningLength = $length;
+                $winningType = $rule['type'];
             }
         }
 
-        return false;
+        return $winningType === 'disallow';
     }
 
     /**
-     * Every Disallow value scoped to "User-agent: *" - the group that
-     * applies to any crawler not specifically named elsewhere in the file,
-     * which this one never is. Consecutive "User-agent:" lines share the
-     * rules that follow them (per spec); a "User-agent:" line seen *after*
-     * a Disallow/Allow starts a fresh group instead of extending the
-     * previous one - the same "*" group can legitimately appear more than
-     * once in one file (e.g. a CMS-generated block appended after a
-     * hand-written one), and both contribute their Disallow lines.
+     * Every Allow/Disallow line scoped to "User-agent: *", each turned into
+     * a matchable regex up front rather than re-parsed per isDisallowed()
+     * call. Consecutive "User-agent:" lines share the rules that follow them
+     * (per spec); a "User-agent:" line seen *after* a Disallow/Allow starts a
+     * fresh group instead of extending the previous one - the same "*" group
+     * can legitimately appear more than once in one file (e.g. a
+     * CMS-generated block appended after a hand-written one), and both
+     * contribute their rules.
+     *
+     * User-agent grouping specifically does matter, unlike the rest of the
+     * simplifications here (no User-agent-name matching beyond "*", no
+     * Sitemap/Crawl-delay handling) - confirmed breaking real crawling
+     * otherwise: a real site's only "Disallow: /" was scoped to
+     * "User-agent: ClaudeBot" (increasingly common - many sites block
+     * AI-training bots by name while leaving general search crawling alone),
+     * and ignoring which group it belonged to made every single path on that
+     * site look disallowed to this crawler too.
+     *
+     * @return list<array{type: 'allow'|'disallow', pattern: string, regex: string}>
      */
-    private static function disallowedPrefixesForWildcardUserAgent(string $robotsTxt): array
+    private static function rulesForWildcardUserAgent(string $robotsTxt): array
     {
-        $prefixes = [];
+        $rules = [];
         $currentUserAgents = [];
         // True once *any* real directive (Allow, Disallow, Sitemap,
         // Content-Signal, Crawl-delay, ...) has been seen since the last
-        // User-agent line - not just Disallow specifically. A group that's
-        // only ever had an "Allow: /" (no Disallow at all, e.g. a
+        // User-agent line - not just Allow/Disallow specifically. A group
+        // that's only ever had an "Allow: /" (no Disallow at all, e.g. a
         // Content-Signal block) still needs the next "User-agent:" line to
         // start a fresh group rather than silently extending this one -
         // confirmed happening for real: a file's "User-agent: *" block had
@@ -207,7 +223,7 @@ UPDATE `Hosts`
 
             $seenDirectiveSinceLastUserAgent = true;
 
-            if (!preg_match('/^Disallow\s*:\s*(.*?)\s*$/i', $line, $match)) {
+            if (!preg_match('/^(Allow|Disallow)\s*:\s*(.*?)\s*$/i', $line, $match)) {
                 continue;
             }
 
@@ -215,11 +231,36 @@ UPDATE `Hosts`
                 continue;
             }
 
-            if ($match[1] !== '') {
-                $prefixes[] = $match[1];
+            // An empty value means "no restriction" for Disallow (the spec's
+            // own "allow everything" escape hatch) and is meaningless for
+            // Allow either way - neither is a pattern worth matching against.
+            if ($match[2] === '') {
+                continue;
             }
+
+            $rules[] = [
+                'type' => strtolower($match[1]) === 'allow' ? 'allow' : 'disallow',
+                'pattern' => $match[2],
+                'regex' => self::patternToRegex($match[2]),
+            ];
         }
 
-        return $prefixes;
+        return $rules;
+    }
+
+    /**
+     * Turns a robots.txt Allow/Disallow value into a regex matching it as a
+     * path prefix, per the spec's actual wildcard rules rather than a plain
+     * string prefix: "*" matches any run of characters, and a trailing "$"
+     * anchors the match to the exact end of the path instead of allowing
+     * anything (however not matched by a "*") after it.
+     */
+    private static function patternToRegex(string $pattern): string
+    {
+        $anchored = str_ends_with($pattern, '$');
+        $body = $anchored ? substr($pattern, 0, -1) : $pattern;
+        $escaped = str_replace('\*', '.*', preg_quote($body, '#'));
+
+        return '#^' . $escaped . ($anchored ? '$' : '') . '#';
     }
 }

@@ -32,22 +32,25 @@ function supports_color(): bool
 
 function color(string $text, string $code): string
 {
-    return supports_color() ? "\033[" . $code . 'm' . $text . "\033[0m" : $text;
+    return supports_color() ? chr(27) . '[' . $code . 'm' . $text . chr(27) . '[0m' : $text;
 }
 
 function ok(string $message): void
 {
-    echo color('[ OK ]', '32') . ' ' . $message . "\n";
+    echo color('[ OK ]', '32') . ' ' . $message . '
+';
 }
 
 function warn(string $message): void
 {
-    echo color('[WARN]', '33') . ' ' . $message . "\n";
+    echo color('[WARN]', '33') . ' ' . $message . '
+';
 }
 
 function fail_line(string $message): void
 {
-    echo color('[FAIL]', '31') . ' ' . $message . "\n";
+    echo color('[FAIL]', '31') . ' ' . $message . '
+';
 }
 
 function fail(string $message): never
@@ -58,7 +61,9 @@ function fail(string $message): never
 
 function heading(string $text): void
 {
-    echo "\n" . color($text, '1') . "\n";
+    echo '
+' . color($text, '1') . '
+';
 }
 
 function is_interactive(): bool
@@ -109,6 +114,22 @@ foreach (['mysqli', 'gd', 'mbstring', 'curl', 'dom'] as $extension) {
         fail('Missing required PHP extension: ' . $extension);
     }
     ok('ext-' . $extension . ' loaded');
+}
+
+// Soft requirement, not fail() - the crawler works fine without it, just
+// falls back to marking a JS-challenge page crawled without ever resolving
+// it (see HeadlessBrowser, CLAUDE.md's crawler conventions). CHROME_BINARY
+// in .env overrides autodetection if none of these names match.
+$chrome_found = false;
+foreach (['chromium-browser', 'google-chrome', 'chromium', 'google-chrome-stable'] as $binary_name) {
+    if (trim((string) shell_exec('command -v ' . escapeshellarg($binary_name) . ' 2>/dev/null')) !== '') {
+        ok($binary_name . ' found (headless JS-challenge resolution available)');
+        $chrome_found = true;
+        break;
+    }
+}
+if (!$chrome_found) {
+    warn('No Chrome/Chromium binary found - JS-challenge pages will be left unresolved. Install one, or set CHROME_BINARY in .env if it\'s installed under a different name.');
 }
 
 // ---------- Directories ----------
@@ -170,7 +191,9 @@ if (is_file($env_path)) {
         $lines[] = $key . '=' . $value;
     }
 
-    file_put_contents($env_path, implode("\n", $lines) . "\n");
+    file_put_contents($env_path, implode('
+', $lines) . '
+');
     ok('Wrote .env');
 }
 
@@ -331,7 +354,8 @@ SELECT 1
 function run_sql(string $sql): void
 {
     if (!mysqli_query(Database::connection(), $sql)) {
-        fail('Schema delta failed: ' . mysqli_error(Database::connection()) . "\n" . $sql);
+        fail('Schema delta failed: ' . mysqli_error(Database::connection()) . '
+' . $sql);
     }
 }
 
@@ -619,18 +643,18 @@ EOF
 
 # The manager runs as apache; its workers write thumbnails, the TLD cache
 # (data/), and one crawler-current-item-N per worker slot (WORKER_COUNT in
-# bin/crawler-manager.php, currently 5). Grant apache write to exactly those:
+# bin/crawler-manager.php, currently 3). Grant apache write to exactly those:
 # DAC via ACL (keeps its existing ownership, so manual `php bin/crawler-manager.php`
 # runs as the owner still work) and MAC via the httpd_sys_rw_content_t label, the
 # same label crawl-topic already carries.
-for n in 0 1 2 3 4; do : > /path/to/DuskRail/crawler-current-item-$n; done
+for n in 0 1 2; do : > /path/to/DuskRail/crawler-current-item-$n; done
 sudo setfacl -R -m u:apache:rwX -m d:u:apache:rwX /path/to/DuskRail/thumbnails /path/to/DuskRail/data
-for n in 0 1 2 3 4; do sudo setfacl -m u:apache:rw /path/to/DuskRail/crawler-current-item-$n; done
+for n in 0 1 2; do sudo setfacl -m u:apache:rw /path/to/DuskRail/crawler-current-item-$n; done
 sudo semanage fcontext -a -t httpd_sys_rw_content_t "/path/to/DuskRail/thumbnails(/.*)?"
 sudo semanage fcontext -a -t httpd_sys_rw_content_t "/path/to/DuskRail/data(/.*)?"
 sudo semanage fcontext -a -t httpd_sys_rw_content_t "/path/to/DuskRail/crawler-current-item.*"
 sudo restorecon -Rv /path/to/DuskRail/thumbnails /path/to/DuskRail/data
-for n in 0 1 2 3 4; do sudo restorecon /path/to/DuskRail/crawler-current-item-$n; done
+for n in 0 1 2; do sudo restorecon /path/to/DuskRail/crawler-current-item-$n; done
 sudo systemctl daemon-reload
 
 # Left disabled (no boot-start) and stopped on purpose - drive it by hand:
@@ -640,4 +664,5 @@ sudo systemctl daemon-reload
 SHELL;
 
 heading('Done');
-echo "DuskRail is set up.\n";
+echo 'DuskRail is set up.
+';

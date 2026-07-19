@@ -56,6 +56,19 @@ function hostFor(URL $url): Host
 $workerSlot = $argv[1] ?? null;
 $currentItemFile = $workerSlot !== null ? CURRENT_CRAWL_ITEM_FILE . '-' . $workerSlot : CURRENT_CRAWL_ITEM_FILE;
 
+// bin/crawler-manager.php owns the one shared, persistent Chrome instance
+// every real fetch goes through (ChromeConnection, HeadlessBrowser) and
+// keeps this file pointed at its current "host:port" - checked before ever
+// calling Item::nextToCrawl() so a Chrome outage doesn't needlessly churn
+// through claiming items it has no way to actually fetch.
+$chromeEndpoint = is_file(CHROME_DEVTOOLS_ENDPOINT_FILE) ? trim(file_get_contents(CHROME_DEVTOOLS_ENDPOINT_FILE)) : '';
+
+if ($chromeEndpoint === '') {
+    echo 'No Chrome instance available (bin/crawler-manager.php not running or still starting up), nothing to do this run.
+';
+    exit(0);
+}
+
 $topic = is_file(CRAWL_TOPIC_FILE) ? trim(file_get_contents(CRAWL_TOPIC_FILE)) : null;
 $item = Item::nextToCrawl($topic !== '' ? $topic : null);
 
@@ -67,11 +80,13 @@ if ($item === null) {
     // item that reliably hangs while it's the only thing left in the queue,
     // would stop it ever reaching the 3-strikes deletion).
     file_put_contents($currentItemFile, '');
-    echo "Nothing to crawl.\n";
+    echo 'Nothing to crawl.
+';
     exit(0);
 }
 
-echo 'Next up: ' . $item -> url . ' (itemId ' . $item -> itemId . ")\n";
+echo 'Next up: ' . $item -> url . ' (itemId ' . $item -> itemId . ')
+';
 
 // Written before any network I/O - if this process hangs and gets killed by
 // bin/crawler-manager.php, this file is the only way that script can find
@@ -83,11 +98,32 @@ $host = hostFor($pageURL);
 
 if ($host -> isDisallowed($pageURL -> path)) {
     $item -> delete();
-    echo "robots.txt disallows this path, deleted this item.\n";
+    echo 'robots.txt disallows this path, deleted this item.
+';
     exit(0);
 }
 
-$connection = new HTTPConnection($pageURL);
+// The real page (if any) that led here, per the Links table - passed to
+// Chrome as the navigation's actual referrer (see ChromeConnection) rather
+// than guessed. Computed once, from the item as originally claimed, and
+// reused unchanged through every redirect hop below - a real browser
+// following a redirect keeps the referrer that started the navigation, it
+// doesn't update it hop to hop.
+$referrerURL = Link::findParentURL($item -> itemId);
+$referrer = $referrerURL !== null ? new URL($referrerURL) : null;
+
+try {
+    $connection = new ChromeConnection($chromeEndpoint, $pageURL, $referrer);
+} catch (\Throwable $exception) {
+    // The shared Chrome instance itself is unreachable/crashed - an
+    // infrastructure problem, not anything wrong with this item, so it's
+    // left alone (claim expires, nextToCrawl() retries it later) rather
+    // than deleted.
+    echo 'Chrome instance unreachable (' . $exception -> getMessage() . '), leaving item for retry.
+';
+    exit(0);
+}
+
 recordHostCrawl($host, $connection -> statusCode);
 
 if ($connection -> statusCode === null) {
@@ -96,7 +132,8 @@ if ($connection -> statusCode === null) {
     // all, so there's no status code and nothing usable behind it. Same
     // "nothing to keep" reasoning as any other unrecoverable failure.
     $item -> delete();
-    echo "Connection failed, deleted this item.\n";
+    echo 'Connection failed, deleted this item.
+';
     exit(0);
 }
 
@@ -104,7 +141,8 @@ for ($hop = 0; in_array($connection -> statusCode, REDIRECT_STATUS_CODES, true);
     if ($hop >= MAX_REDIRECTS) {
         $connection -> readBody();
         $item -> delete();
-        echo "Too many redirects, deleted this item.\n";
+        echo 'Too many redirects, deleted this item.
+';
         exit(0);
     }
 
@@ -113,7 +151,8 @@ for ($hop = 0; in_array($connection -> statusCode, REDIRECT_STATUS_CODES, true);
 
     if ($location === null) {
         $item -> delete();
-        echo "Redirect status with no Location header, deleted this item.\n";
+        echo 'Redirect status with no Location header, deleted this item.
+';
         exit(0);
     }
 
@@ -121,16 +160,19 @@ for ($hop = 0; in_array($connection -> statusCode, REDIRECT_STATUS_CODES, true);
 
     if (!$redirectTarget -> isValid()) {
         $item -> delete();
-        echo "Redirect target isn't a real URL, deleted this item.\n";
+        echo 'Redirect target isn\'t a real URL, deleted this item.
+';
         exit(0);
     }
 
     $previousItemId = $item -> itemId;
     $item = $item -> redirectTo($redirectTarget);
-    echo 'Redirected to: ' . $item -> url . ' (itemId ' . $item -> itemId . ")\n";
+    echo 'Redirected to: ' . $item -> url . ' (itemId ' . $item -> itemId . ')
+';
 
     if ($item -> crawledTime !== null) {
-        echo "Redirect target already crawled, nothing more to do.\n";
+        echo 'Redirect target already crawled, nothing more to do.
+';
         exit(0);
     }
 
@@ -143,7 +185,8 @@ for ($hop = 0; in_array($connection -> statusCode, REDIRECT_STATUS_CODES, true);
     // URL was new, so the itemId is unchanged) still holds its original claim
     // and must NOT re-claim - claim() would fail against its own live claim.
     if ($item -> itemId !== $previousItemId && !$item -> reclaim()) {
-        echo "Redirect target already claimed by another worker, leaving it to them.\n";
+        echo 'Redirect target already claimed by another worker, leaving it to them.
+';
         exit(0);
     }
 
@@ -159,16 +202,25 @@ for ($hop = 0; in_array($connection -> statusCode, REDIRECT_STATUS_CODES, true);
 
     if ($host -> isDisallowed($pageURL -> path)) {
         $item -> delete();
-        echo "robots.txt disallows the redirect target, deleted this item.\n";
+        echo 'robots.txt disallows the redirect target, deleted this item.
+';
         exit(0);
     }
 
-    $connection = new HTTPConnection($pageURL);
+    try {
+        $connection = new ChromeConnection($chromeEndpoint, $pageURL, $referrer);
+    } catch (\Throwable $exception) {
+        echo 'Chrome instance unreachable (' . $exception -> getMessage() . '), leaving item for retry.
+';
+        exit(0);
+    }
+
     recordHostCrawl($host, $connection -> statusCode);
 
     if ($connection -> statusCode === null) {
         $item -> delete();
-        echo "Connection failed, deleted this item.\n";
+        echo 'Connection failed, deleted this item.
+';
         exit(0);
     }
 }
@@ -180,7 +232,8 @@ if (in_array($connection -> statusCode, RATE_LIMITED_STATUS_CODES, true)) {
     // nextToCrawl() simply retries it once that cooldown passes, rather
     // than deleting it like a genuine permanent failure.
     $connection -> readBody();
-    echo 'Status ' . $connection -> statusCode . ", backing off this host, item left for retry.\n";
+    echo 'Status ' . $connection -> statusCode . ', backing off this host, item left for retry.
+';
     exit(0);
 }
 
@@ -191,7 +244,8 @@ if ($connection -> statusCode < 200 || $connection -> statusCode >= 300) {
     // same call as an unrecoverable redirect: delete, don't markCrawled().
     $connection -> readBody();
     $item -> delete();
-    echo 'Status ' . $connection -> statusCode . ", deleted this item.\n";
+    echo 'Status ' . $connection -> statusCode . ', deleted this item.
+';
     exit(0);
 }
 
@@ -209,7 +263,8 @@ if ($contentType !== null && $contentType -> isImage()) {
         // tracking pixel/spacer/decorative icon). Either way there's nothing
         // to keep, same reasoning as deleting an unrecoverable redirect.
         $item -> delete();
-        echo "Couldn't use image (undecodable or unusable dimensions), deleted this item.\n";
+        echo 'Couldn\'t use image (undecodable or unusable dimensions), deleted this item.
+';
         exit(0);
     }
 
@@ -219,7 +274,8 @@ if ($contentType !== null && $contentType -> isImage()) {
     // extract that would replace them, real or otherwise.
     $item -> markCrawled($contentType -> type, $item -> title, $item -> description, $item -> keywords, null, null);
 
-    echo "Saved thumbnail, marked crawled.\n";
+    echo 'Saved thumbnail, marked crawled.
+';
     exit(0);
 }
 
@@ -231,7 +287,8 @@ if ($contentType === null || !$contentType -> isHTML()) {
     // with the same non-result every single run.
     $connection -> readBody();
     $item -> delete();
-    echo 'Not HTML (' . ($contentType ?-> type ?? 'no response') . "), deleted this item.\n";
+    echo 'Not HTML (' . ($contentType ?-> type ?? 'no response') . '), deleted this item.
+';
     exit(0);
 }
 
@@ -239,6 +296,50 @@ $html = $connection -> readBody();
 $document = HTMLLoader::load($html, $contentType -> charset);
 $baseURL = HTMLLoader::baseURL($document, $pageURL);
 HTMLLoader::inlineImageAltText($document);
+$metadata = HTMLLoader::extractMetadata($document);
+
+// A JS bot-challenge interstitial ("Just a moment..." - Cloudflare's, the
+// one actually seen in this crawl), not the real page behind it - hand the
+// already-fetched HTML to a real headless browser and let its JS resolve
+// the challenge (see HeadlessBrowser, TODO.md). If that succeeds and the
+// result isn't itself another challenge, treat it as what was actually
+// fetched from here on - the same $html/$document/$baseURL/$metadata
+// variables, so everything below (images, links, body text) runs against
+// the real content instead of the challenge shell.
+if (in_array($metadata['title'], JS_CHALLENGE_TITLES, true)) {
+    $resolvedHTML = HeadlessBrowser::resolveChallenge($chromeEndpoint, $html, $pageURL);
+
+    if ($resolvedHTML !== null) {
+        $resolvedDocument = HTMLLoader::load($resolvedHTML, $contentType -> charset);
+        $resolvedMetadata = HTMLLoader::extractMetadata($resolvedDocument);
+
+        if (!in_array($resolvedMetadata['title'], JS_CHALLENGE_TITLES, true)) {
+            $html = $resolvedHTML;
+            $document = $resolvedDocument;
+            $baseURL = HTMLLoader::baseURL($document, $pageURL);
+            HTMLLoader::inlineImageAltText($document);
+            $metadata = $resolvedMetadata;
+        }
+    }
+
+    if (in_array($metadata['title'], JS_CHALLENGE_TITLES, true)) {
+        // Still a challenge - no headless browser available, or it timed
+        // out, or the challenge script itself didn't resolve inside its
+        // budget. Mark crawled anyway (so nextToCrawl() stops retrying it)
+        // but keep whatever title/description this item already had from
+        // being discovered as a link, rather than overwriting them with the
+        // challenge page's own placeholder metadata. fullHTML is still
+        // saved - useful for a future retry once headless browsing works
+        // for this site, or is available at all.
+        $item -> markCrawled($contentType -> type, $item -> title, $item -> description, $item -> keywords, null, $html);
+        echo 'JS challenge page, marked crawled (kept existing title/description).
+';
+        exit(0);
+    }
+
+    echo 'JS challenge resolved via headless browser.
+';
+}
 
 $images = HTMLLoader::extractImageLinks($document, $baseURL);
 
@@ -256,7 +357,8 @@ foreach ($images as $image) {
     Link::create($item -> itemId, $imageItem -> itemId, $image['description'] ?: null);
 }
 
-echo 'Saved ' . count($images) . " images.\n";
+echo 'Saved ' . count($images) . ' images.
+';
 
 $anchorLinks = HTMLLoader::extractAnchorLinks($document, $baseURL);
 
@@ -282,25 +384,8 @@ foreach ($anchorLinks as $link) {
     Link::create($item -> itemId, $linkedItem -> itemId, $link['description'] ?: null);
 }
 
-echo 'Saved ' . count($anchorLinks) . " anchor links.\n";
-
-$metadata = HTMLLoader::extractMetadata($document);
-
-// A JS bot-challenge interstitial ("Just a moment..." - Cloudflare's, the
-// one actually seen in this crawl), not the real page behind it - see
-// TODO.md for the planned headless-browser fix. For now: mark crawled
-// anyway (so nextToCrawl() stops retrying it) but keep whatever title/
-// description this item already had from being discovered as a link,
-// rather than overwriting them with the challenge page's own placeholder
-// metadata. fullHTML is still saved - it's exactly what a future
-// headless-browser pass would need to inject and re-evaluate, so there's no
-// reason to throw it away. The images/links already extracted from this
-// page's markup above are kept regardless of any of this.
-if (in_array($metadata['title'], JS_CHALLENGE_TITLES, true)) {
-    $item -> markCrawled($contentType -> type, $item -> title, $item -> description, $item -> keywords, null, $html);
-    echo "JS challenge page, marked crawled (kept existing title/description).\n";
-    exit(0);
-}
+echo 'Saved ' . count($anchorLinks) . ' anchor links.
+';
 
 HTMLLoader::removeStyleAndScriptTags($document);
 HTMLLoader::removeBoilerplateElements($document);
@@ -314,4 +399,5 @@ $description = $metadata['description'] ?? mb_substr($bodyText, 0, 500);
 
 $item -> markCrawled($contentType -> type, $metadata['title'], $description, $metadata['keywords'], $bodyText, $html);
 
-echo "Marked crawled.\n";
+echo 'Marked crawled.
+';

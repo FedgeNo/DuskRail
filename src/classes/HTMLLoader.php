@@ -382,10 +382,10 @@ class HTMLLoader
      */
     private static function normalizeWhitespace(string $text): string
     {
-        $text = str_replace(["\r\n", "\r"], "\n", $text);
+        $text = str_replace([chr(13) . chr(10), chr(13)], chr(10), $text);
         $text = preg_replace('/[^\S\n]+/', ' ', $text);
-        $text = preg_replace('/ *\n */', "\n", $text);
-        $text = preg_replace('/\n{3,}/', "\n\n", $text);
+        $text = preg_replace('/ *\n */', chr(10), $text);
+        $text = preg_replace('/\n{3,}/', chr(10) . chr(10), $text);
 
         return trim($text);
     }

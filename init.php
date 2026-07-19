@@ -17,6 +17,12 @@ define('CURRENT_CRAWL_ITEM_FILE', ROOT_DIR . '/crawler-current-item');
 // sets it and the fresh CLI process that needs to see it next.
 define('CRAWL_TOPIC_FILE', ROOT_DIR . '/crawl-topic');
 
+// Where bin/crawler-manager.php writes the shared, persistent Chrome
+// instance's "host:port" DevTools endpoint - each fresh bin/crawler.php
+// worker process reads this to talk to the one already-running browser
+// rather than launching its own (see ChromeProcess).
+define('CHROME_DEVTOOLS_ENDPOINT_FILE', ROOT_DIR . '/chrome-devtools-endpoint');
+
 error_reporting(E_ALL);
 ini_set('display_errors', '1');
 

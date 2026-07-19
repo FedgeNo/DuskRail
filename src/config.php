@@ -10,4 +10,8 @@ return [
     'password' => Env::get('DB_PASSWORD', 'change-me'),
     'siteURL' => Env::get('SITE_URL', 'http://duskrail.local'),
     'siteTitle' => Env::get('SITE_TITLE', 'DuskRail'),
+    // Empty means autodetect (HeadlessBrowser tries chromium-browser,
+    // google-chrome, chromium, google-chrome-stable on $PATH in that order).
+    // Only needed if none of those names match what's installed.
+    'chromeBinary' => Env::get('CHROME_BINARY', ''),
 ];

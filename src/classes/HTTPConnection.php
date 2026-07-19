@@ -8,6 +8,15 @@ declare(strict_types=1);
  * arrive - the connection stays open, not closed, so a caller can decide
  * (from the status code/Content-Type/Content-Length alone) whether it's
  * worth reading the body at all before resuming.
+ *
+ * Real page/image crawling goes through ChromeConnection instead (a genuine
+ * request from the shared persistent Chrome instance, not an approximation
+ * of one) - this class is left for fetches that aren't actually crawler
+ * traffic against the target site at all (Host::fetchRobotsTxtIfMissing(),
+ * TLDs.php's one-time IANA list fetch), where a plain, fast cURL GET is all
+ * that's needed. Still sent with a real-Chrome-shaped header set rather than
+ * a bare User-Agent, since there's no reason to make even these fetches look
+ * unlike anything else this crawler sends.
  */
 class HTTPConnection
 {
@@ -17,6 +26,14 @@ class HTTPConnection
     // actual text. This is a backstop against truly extreme/malicious
     // responses, not a tight budget.
     private const MAX_BODY_SIZE = 20 * 1024 * 1024;
+
+    // Kept to a single recent, real, common desktop build rather than
+    // parameterized/rotated - a fleet of "different" UAs from the same
+    // crawler is its own tell, and one plausible, current identity is all
+    // "looks like a real browser" actually requires.
+    private const CHROME_VERSION = '149';
+    private const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
+        . '(KHTML, like Gecko) Chrome/' . self::CHROME_VERSION . '.0.0.0 Safari/537.36';
 
     private \CurlMultiHandle $multiHandle;
     private \CurlHandle $easyHandle;
@@ -37,14 +54,18 @@ class HTTPConnection
             CURLOPT_PORT => $url -> port,
             CURLOPT_HTTPGET => true,
             CURLOPT_CONNECTTIMEOUT => 10,
-            CURLOPT_USERAGENT => 'DuskRail/0.1',
+            CURLOPT_HTTPHEADER => self::chromeHeaders(),
             // Without this, curl sends no Accept-Encoding at all - but some
             // servers gzip the response anyway regardless (confirmed: a real
             // robots.txt fetch came back as raw gzip bytes, which then
             // failed to insert as invalid UTF-8). An empty string means
             // "accept and auto-decode every encoding curl was built with"
             // (gzip, deflate, br, ...), so the body handed to $this -> body is
-            // always the real decompressed content either way.
+            // always the real decompressed content either way. Real Chrome's
+            // Accept-Encoding also lists "zstd" - omitted here since this
+            // build of curl can't decode it, and requesting an encoding it
+            // can't turn back into the real body would be worse than the
+            // minor mismatch of not asking for it at all.
             CURLOPT_ENCODING => '',
             CURLOPT_HEADERFUNCTION => $this -> onHeaderLine(...),
             // Not read until readBody() resumes the transfer - curl_pause()
@@ -111,6 +132,31 @@ class HTTPConnection
         $this -> bodyRead = true;
 
         return $this -> body;
+    }
+
+    /**
+     * The header set (name, value, and order) a real Chrome/self::CHROME_VERSION
+     * sends for a top-level navigation - the only shape this class's callers
+     * ever need (robots.txt, the IANA TLD list - never an image or anything
+     * fetched as a "subresource" in the first place).
+     */
+    private static function chromeHeaders(): array
+    {
+        return [
+            'sec-ch-ua: "Chromium";v="' . self::CHROME_VERSION . '", "Not:A-Brand";v="24", '
+                . '"Google Chrome";v="' . self::CHROME_VERSION . '"',
+            'sec-ch-ua-mobile: ?0',
+            'sec-ch-ua-platform: "Windows"',
+            'Upgrade-Insecure-Requests: 1',
+            'User-Agent: ' . self::USER_AGENT,
+            'Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,'
+                . 'image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
+            'Sec-Fetch-Site: none',
+            'Sec-Fetch-Mode: navigate',
+            'Sec-Fetch-User: ?1',
+            'Sec-Fetch-Dest: document',
+            'Accept-Language: en-US,en;q=0.9',
+        ];
     }
 
     private function onHeaderLine(\CurlHandle $ch, string $line): int
