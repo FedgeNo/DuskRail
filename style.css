@@ -1,7 +1,7 @@
 /* Shared site-wide dark theme. */
 body {
     background: #000;
-    color: #e9ecef;
+    color: #EEEEEE;
     /* MainNavigation is fixed-top, so it's pulled out of normal flow -
        without this, its ~56px navbar height would sit on top of the first
        bit of every page's content. */
@@ -56,15 +56,20 @@ body {
     color: #adb5bd;
 }
 #query-input {
-    background: #1a1a1a;
-    border-color: #495057;
-    color: #e9ecef;
+    background: #000;
+    border-color: #F0F;
+    color: #808;
 }
 #query-input:focus {
-    background: #1a1a1a;
-    border-color: #7fbf7f;
-    color: #e9ecef;
+    background: #808;
+    border-color: #f0f;
+    color: #0F0;
     box-shadow: 0 0 0 0.25rem rgba(127, 191, 127, 0.25);
+}
+#search-button {
+    border-color: #f0f;
+    background: #808;
+    color: #0f0;
 }
 .result {
     display: flex;
