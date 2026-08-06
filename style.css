@@ -10,30 +10,70 @@ body {
 
 /* Bootstrap's plain .navbar has no horizontal padding of its own (that's
    normally a .container's job) - this lines the nav brand up with the page
-   content below it (index.php's .search-page starts at the same 1rem left
+   content below it (index.php's .SearchPage starts at the same 1rem left
    padding) instead of sitting flush against the browser edge. */
 .NavContainer {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    width: 100%;
     padding: 0 1rem;
 }
+.NavBrand {
+    margin-right: auto;
+}
+.NavLink {
+    color: #adb5bd;
+    font-size: 0.9rem;
+    text-decoration: none;
+}
+.NavLink:hover,
+.NavLink:focus-visible {
+    color: #7fbf7f;
+}
 
-/* index.php - search page: a fixed 60vw/40vw split, search on the left,
-   image previews pinned on the right (Google Images-style). */
-.layout {
+/* Anything focused by keyboard gets a visible ring. Several things here are
+   focusable without being native controls (the image tiles are divs with
+   role="button"), and the browser's own default outline is invisible against
+   this background. */
+a:focus-visible,
+button:focus-visible,
+input:focus-visible,
+[tabindex]:focus-visible {
+    outline: 2px solid #7fbf7f;
+    outline-offset: 2px;
+}
+
+/* login.php */
+.LoginPage {
+    max-width: 24rem;
+    margin: 4rem auto;
+    padding: 0 1rem;
+}
+.LoginError {
+    margin-bottom: 0.75rem;
+    color: #ff8f8f;
+}
+
+/* index.php - search page: search on the left, image previews pinned on the
+   right (Google Images-style). */
+.Layout {
     display: flex;
     align-items: flex-start;
 }
-.search-page {
-    width: 60vw;
+.SearchPage {
+    flex: 1 1 60%;
+    min-width: 0;
     box-sizing: border-box;
     margin: 3rem 0;
     padding: 0 1.5rem 0 1rem;
 }
 /* Bootstrap's reboot leaves the fieldset borderless already; this just tames
    its oversized default legend down to a compact label for the radio group. */
-.result-type {
+.ResultType {
     min-width: 0;
 }
-.result-type legend {
+.ResultType legend {
     float: none;
     width: auto;
     margin-bottom: 0.35rem;
@@ -41,8 +81,8 @@ body {
     font-weight: 600;
     color: #adb5bd;
 }
-.preview-column {
-    width: 40vw;
+.PreviewColumn {
+    flex: 0 0 40%;
     box-sizing: border-box;
     /* Below the fixed navbar (body's own padding-top), pinned there while
        the search column scrolls past it - same idea as Google Images'
@@ -58,20 +98,27 @@ body {
 #query-input {
     background: #000;
     border-color: #F0F;
-    color: #808;
+    /* Light enough to actually read against the black field behind it - the
+       magenta this used to share with the border sat at roughly 2:1 against
+       #000, well under what's legible for body text, let alone what someone
+       is proofreading a typed query in. */
+    color: #F5C2F5;
+}
+#query-input::placeholder {
+    color: #9A6E9A;
 }
 #query-input:focus {
-    background: #808;
-    border-color: #f0f;
-    color: #0F0;
-    box-shadow: 0 0 0 0.25rem rgba(127, 191, 127, 0.25);
+    background: #2A002A;
+    border-color: #F0F;
+    color: #FFF;
+    box-shadow: 0 0 0 0.25rem rgba(255, 0, 255, 0.25);
 }
 #search-button {
-    border-color: #f0f;
+    border-color: #F0F;
     background: #808;
-    color: #0f0;
+    color: #0F0;
 }
-.result {
+.SearchResultRow {
     display: flex;
     gap: 1rem;
     padding: 1rem 0;
@@ -79,48 +126,53 @@ body {
     color: inherit;
     text-decoration: none;
 }
-.result:hover .title {
+.SearchResultRow:hover .SearchResultTitle {
     text-decoration: underline;
 }
-.result img {
+.SearchResultRow img {
     max-height: 90px;
     max-width: 120px;
     object-fit: cover;
     flex-shrink: 0;
 }
-.result .title {
+.SearchResultTitle {
     color: #7fbf7f;
+    overflow-wrap: break-word;
 }
-.result .url {
+.SearchResultDescription {
+    overflow-wrap: break-word;
+}
+.SearchResultURL {
     font-size: 0.85rem;
     color: #7fbf7f;
+    overflow-wrap: break-word;
 }
-.image-grid {
+.ImageGrid {
     display: flex;
     flex-direction: column;
     gap: 8px;
 }
-.image-grid-row {
+.ImageGridRow {
     display: flex;
     align-items: flex-start;
     gap: 8px;
 }
-.image-tile {
+.ImageTile {
     display: block;
     flex-shrink: 0;
     color: inherit;
     text-decoration: none;
     cursor: pointer;
 }
-.image-tile.selected img {
+.ImageTile.Selected img {
     outline: 3px solid #7fbf7f;
     outline-offset: 2px;
 }
-.image-tile img {
+.ImageTile img {
     display: block;
     border-radius: 4px;
 }
-.image-tile .url {
+.ImageTileURL {
     margin-top: 0.35rem;
     font-size: 0.75rem;
     color: #7fbf7f;
@@ -128,7 +180,7 @@ body {
     overflow: hidden;
     text-overflow: ellipsis;
 }
-.image-tile .description {
+.ImageTileDescription {
     font-size: 0.75rem;
     color: inherit;
     display: -webkit-box;
@@ -139,7 +191,17 @@ body {
 #status {
     color: #adb5bd;
 }
-.preview-image {
+.IndexStats {
+    color: #adb5bd;
+    font-size: 0.9rem;
+}
+.SearchResultDescription mark {
+    background: transparent;
+    color: #7fbf7f;
+    font-weight: 600;
+    padding: 0;
+}
+.PreviewImage {
     display: block;
     width: 100%;
     max-height: 55vh;
@@ -148,35 +210,57 @@ body {
     margin-bottom: 1rem;
     background: #1a1a1a;
 }
-.preview-title {
+.PreviewTitle {
     color: #e9ecef;
     font-weight: 600;
     margin-bottom: 0.5rem;
+    overflow-wrap: break-word;
 }
-.preview-description {
+.PreviewDescription {
     white-space: pre-wrap;
     margin-bottom: 1rem;
+    overflow-wrap: break-word;
 }
-.preview-parent {
+.PreviewParent {
     font-size: 0.85rem;
     margin-bottom: 0.35rem;
     overflow-wrap: break-word;
 }
-.preview-parent a {
+.PreviewParent a {
     color: #7fbf7f;
 }
-.preview-image-link {
+.PreviewImageLink {
     display: inline-block;
     font-size: 0.85rem;
     color: #7fbf7f;
 }
 
 /* watch.php - crawl feed page */
+
+/* The instrumentation stays pinned just below the fixed navbar while the
+   page scrolls with the feed - the opaque background is what keeps feed
+   rows from showing through as they slide underneath. */
+.WatchControls {
+    position: sticky;
+    top: 56px;
+    z-index: 10;
+    background: #000;
+}
+.CrawlerStatus {
+    font-size: 0.9rem;
+    color: #adb5bd;
+}
+.CrawlerStatus.Running {
+    color: #7fbf7f;
+}
+.CrawlerStatus.Stopped {
+    color: #ff8f8f;
+}
 #feed {
     height: 80vh;
     overflow-y: auto;
 }
-#feed .item {
+.CrawlFeedItem {
     opacity: 0;
     animation: flash-in 0.4s ease-out forwards;
     border-bottom: 1px solid #333;
@@ -186,6 +270,43 @@ body {
     0% { opacity: 0; background-color: #ffd54f; color: #000; }
     100% { opacity: 1; background-color: transparent; }
 }
-#feed .description {
+.CrawlFeedThumbnail {
+    max-height: 50px;
+    max-width: 80px;
+    object-fit: cover;
+}
+.CrawlFeedDescription {
     color: #adb5bd;
+}
+
+/* Below this the two columns can't both be usable side by side - 40% of a
+   phone's width is roughly a dozen characters. The preview stops being a
+   pinned column and becomes an ordinary block above the results, where it
+   gets the full width when there's actually something in it. */
+@media (max-width: 900px) {
+    .Layout {
+        flex-direction: column;
+    }
+    .SearchPage,
+    .PreviewColumn {
+        flex: 1 1 auto;
+        width: 100%;
+    }
+    .SearchPage {
+        order: 2;
+        margin-top: 1rem;
+    }
+    .PreviewColumn {
+        order: 1;
+        position: static;
+        height: auto;
+        max-height: 60vh;
+        border-left: none;
+        border-bottom: 1px solid #333;
+    }
+    /* An empty preview column would otherwise still take its padding and
+       border, leaving a stray rule across the top of every text search. */
+    .PreviewColumn:empty {
+        display: none;
+    }
 }

@@ -4,6 +4,14 @@ declare(strict_types=1);
 
 class Link
 {
+    // Matches schema.sql's Links.description column, for the same reason Item
+    // carries its own limits: link text is a parent node's whole textContent
+    // and routinely runs past this. INSERT IGNORE below quietly downgrades
+    // strict mode's "Data too long" to a warning and truncates anyway, so
+    // without this the cut happens invisibly, at a byte count nothing here
+    // chose, and mb_substr is what keeps it from landing mid-character.
+    private const MAX_DESCRIPTION_LENGTH = 255;
+
     /**
      * Records that $parentId links to $childId, described by $description
      * (e.g. the image's parent-node text). INSERT IGNORE because the same
@@ -23,6 +31,7 @@ class Link
         }
 
         $connection = Database::connection();
+        $description = $description !== null ? mb_substr($description, 0, self::MAX_DESCRIPTION_LENGTH) : null;
 
         $insert = mysqli_prepare($connection, '
 INSERT IGNORE INTO `Links` (`parentId`, `childId`, `description`)

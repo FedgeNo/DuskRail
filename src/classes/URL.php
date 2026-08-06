@@ -73,6 +73,15 @@ class URL
         // other unrecoverable failure - not retried under a different scheme.
         if ($this -> scheme === 'http') {
             $this -> scheme = 'https';
+
+            // An explicit ":80" belonged to the http URL that was just
+            // upgraded - carrying it across would mean opening a TLS
+            // connection to a plaintext port, which fails outright and gets
+            // the item deleted like any other unrecoverable failure. It goes
+            // back to being the scheme's default along with the scheme.
+            if (($parts['port'] ?? null) === self::DEFAULT_PORTS['http']) {
+                unset($parts['port']);
+            }
         }
 
         $this -> pathGiven = isset($parts['path']) && $parts['path'] !== '';
@@ -87,7 +96,7 @@ class URL
         $this -> queryGiven = isset($parts['query']);
         $this -> queryParameters = [];
         if ($this -> queryGiven) {
-            parse_str($parts['query'], $this -> queryParameters);
+            $this -> queryParameters = self::parseQuery($parts['query']);
 
             foreach (self::TRACKING_PARAMETERS as $trackingParameter) {
                 unset($this -> queryParameters[$trackingParameter]);
@@ -171,10 +180,21 @@ class URL
         $url .= $this -> path;
 
         if ($this -> queryParameters !== []) {
-            $url .= '?' . http_build_query($this -> queryParameters);
+            $url .= '?' . $this -> queryString();
         }
 
         return $url;
+    }
+
+    /**
+     * The path with its query string attached - what robots.txt rules are
+     * matched against (Host::isDisallowed()). A rule like "Disallow: /*?"
+     * or "Disallow: /search?q=" is about the query, and matching the bare
+     * path would silently ignore every rule of that shape.
+     */
+    public function pathAndQuery(): string
+    {
+        return $this -> queryParameters === [] ? $this -> path : $this -> path . '?' . $this -> queryString();
     }
 
     /**
@@ -254,6 +274,73 @@ class URL
             static fn (array $match): string => rawurlencode($match[0]),
             $path
         );
+    }
+
+    /**
+     * A query string as its name => value pairs. Deliberately not parse_str():
+     * that function exists to rebuild PHP request variables, not to read a URL,
+     * and it rewrites names on the way through - "a.b" and "a b" both become
+     * "a_b", and "tag[]=x&tag[]=y" becomes a nested array that http_build_query()
+     * then re-emits as "tag[0]=x&tag[1]=y". Every one of those is a different
+     * URL from the one the page actually linked to, so toString() would hand
+     * the crawler an address the site never published.
+     *
+     * A name that genuinely repeats ("tag=x&tag=y", "tag[]=x&tag[]=y") keeps
+     * every value, as a list under that one name - dropping all but the last
+     * would be the same kind of lie about which resource this is. Both shapes
+     * still read as one key for isset() (isLikelyOAuthURL()) and unset()
+     * (TRACKING_PARAMETERS) purposes.
+     */
+    private static function parseQuery(string $query): array
+    {
+        $parameters = [];
+
+        foreach (explode('&', $query) as $pair) {
+            if ($pair === '') {
+                continue;
+            }
+
+            [$name, $value] = array_pad(explode('=', $pair, 2), 2, '');
+            $name = rawurldecode(str_replace('+', ' ', $name));
+
+            if ($name === '') {
+                continue;
+            }
+
+            $value = rawurldecode(str_replace('+', ' ', $value));
+
+            if (!isset($parameters[$name])) {
+                $parameters[$name] = $value;
+                continue;
+            }
+
+            $parameters[$name] = is_array($parameters[$name]) ? $parameters[$name] : [$parameters[$name]];
+            $parameters[$name][] = $value;
+        }
+
+        return $parameters;
+    }
+
+    /**
+     * The query string to put back on the end of toString(). Not
+     * http_build_query(): that turns a repeated name's list of values into
+     * "name[0]=&name[1]=" indexed keys, which is exactly the rewriting
+     * parseQuery() exists to avoid - here each value is emitted under the one
+     * name it was actually given. Encoding matches http_build_query()'s
+     * otherwise (urlencode, so a space is "+"), since that's the form every
+     * URL already in the index was normalized to.
+     */
+    private function queryString(): string
+    {
+        $pairs = [];
+
+        foreach ($this -> queryParameters as $name => $value) {
+            foreach (is_array($value) ? $value : [$value] as $single) {
+                $pairs[] = urlencode((string) $name) . '=' . urlencode($single);
+            }
+        }
+
+        return implode('&', $pairs);
     }
 
     private static function isImagePath(string $path): bool

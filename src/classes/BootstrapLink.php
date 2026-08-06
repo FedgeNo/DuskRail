@@ -2,6 +2,12 @@
 
 declare(strict_types=1);
 
+/**
+ * The Bootstrap stylesheet, served from this site rather than a CDN. Local
+ * because it was the one external asset - with it vendored, the Content
+ * Security Policy (see HTMLDocument) can say styles only ever come from
+ * here, and pages keep working with no third party up or reachable.
+ */
 class BootstrapLink extends LinkTag
 {
     public function __construct()
@@ -9,6 +15,6 @@ class BootstrapLink extends LinkTag
         parent::__construct();
 
         $this -> rel = 'stylesheet';
-        $this -> href = 'https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css';
+        $this -> href = ServerURL::absolute('/bootstrap.min.css');
     }
 }

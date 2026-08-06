@@ -19,7 +19,25 @@ class Page
         $viewport -> content = 'width=device-width, initial-scale=1';
         $page -> addHeadContent($viewport);
 
+        // Read by watch.js and sent back as X-CSRF-Token on every
+        // state-changing request (see Auth::requireWriteAPI()). Only rendered
+        // for a session that has one - minting a token for an anonymous
+        // visitor would just start a session for every hit on the login page.
+        if (Auth::isAuthenticated()) {
+            $csrfToken = new Meta();
+            $csrfToken -> name = 'csrf-token';
+            $csrfToken -> content = Auth::csrfToken();
+            $page -> addHeadContent($csrfToken);
+        }
+
         $page -> addHeadContent(new Title($title . ' - ' . $config['siteTitle']));
+
+        $favicon = new LinkTag();
+        $favicon -> rel = 'icon';
+        $favicon -> type = 'image/svg+xml';
+        $favicon -> href = ServerURL::absolute('/favicon.svg');
+        $page -> addHeadContent($favicon);
+
         $page -> addHeadContent(new BootstrapLink());
 
         $stylesheet = new LinkTag();

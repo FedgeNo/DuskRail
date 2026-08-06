@@ -15,15 +15,11 @@ if (PHP_SAPI !== 'cli') {
     exit(1);
 }
 
-define('ROOT_DIR', dirname(__DIR__));
-
-spl_autoload_register(function (string $class): void {
-    $file = ROOT_DIR . '/src/classes/' . $class . '.php';
-
-    if (is_file($file)) {
-        require $file;
-    }
-});
+// The same bootstrap every other entry point uses, rather than a second copy
+// of it here - this script's schema deltas call into app classes (Host, URL,
+// Setting), and those expect the constants and autoloader everything else
+// runs with, not a lookalike that drifts from them.
+require __DIR__ . '/../init.php';
 
 function supports_color(): bool
 {
@@ -84,6 +80,67 @@ function prompt(string $question, string $default): string
 }
 
 /**
+ * Reads a password without echoing it back to the terminal. `stty -echo` is
+ * the only way to do this from plain PHP CLI (there's no readline hook for
+ * it), and the trap restores the terminal even if this script dies mid-read -
+ * a terminal left with echo off is a genuinely unpleasant thing to hand back
+ * to someone.
+ */
+function prompt_secret(string $question): string
+{
+    if (!is_interactive()) {
+        return '';
+    }
+
+    echo $question . ': ';
+    shell_exec('stty -echo 2>/dev/null');
+    $answer = trim((string) fgets(STDIN));
+    shell_exec('stty echo 2>/dev/null');
+    echo '
+';
+
+    return $answer;
+}
+
+/**
+ * Sets KEY=value in an existing .env: fills in the line if the key is already
+ * there (which is what a key present but blank looks like), appends it if it
+ * isn't. Every other line is written back exactly as it was, comments and
+ * ordering included - .env is hand-edited and holds live credentials, so
+ * nothing this script doesn't understand should be reformatted or lost.
+ *
+ * Appending unconditionally would leave the file with the key twice, and
+ * which of the two won would come down to which Env::load() happened to read
+ * last.
+ */
+function set_env_line(string $path, string $key, string $value): void
+{
+    $lines = file($path, FILE_IGNORE_NEW_LINES);
+
+    if ($lines === false) {
+        fail('Couldn\'t read ' . $path . ' to set ' . $key . '.');
+    }
+
+    $replaced = false;
+
+    foreach ($lines as $index => $line) {
+        if (str_starts_with(ltrim($line), $key . '=')) {
+            $lines[$index] = $key . '=' . $value;
+            $replaced = true;
+            break;
+        }
+    }
+
+    if (!$replaced) {
+        $lines[] = $key . '=' . $value;
+    }
+
+    file_put_contents($path, implode('
+', $lines) . '
+');
+}
+
+/**
  * MySQL/MariaDB never allows a placeholder (?) in place of an identifier
  * (a database/table/column/user name) - only for actual values - so a
  * database or username that has to be backtick-interpolated into DDL/DCL
@@ -132,17 +189,28 @@ if (!$chrome_found) {
     warn('No Chrome/Chromium binary found - JS-challenge pages will be left unresolved. Install one, or set CHROME_BINARY in .env if it\'s installed under a different name.');
 }
 
+// Soft requirement too - without it, PDFs are dropped from the crawl instead
+// of having their text indexed (bin/crawler.php checks at runtime).
+if (trim((string) shell_exec('command -v pdftotext 2>/dev/null')) !== '') {
+    ok('pdftotext found (PDF text extraction available)');
+} else {
+    warn('pdftotext not found - PDFs won\'t be indexed. Install poppler-utils to enable that.');
+}
+
 // ---------- Directories ----------
 
 heading('Checking directories');
 
-$thumbnails_dir = ROOT_DIR . '/thumbnails';
-
-if (!is_dir($thumbnails_dir)) {
-    mkdir($thumbnails_dir, 0755, true);
-    ok('Created ' . $thumbnails_dir);
-} else {
-    ok($thumbnails_dir . ' already exists');
+// Everything the running crawler writes: thumbnails it serves, the TLD cache,
+// and VAR_DIR's per-run state. These are the only directories the service user
+// ever needs write access to - the checkout around them stays read-only to it.
+foreach ([ROOT_DIR . '/thumbnails', ROOT_DIR . '/data', VAR_DIR] as $directory) {
+    if (!is_dir($directory)) {
+        mkdir($directory, 0755, true);
+        ok('Created ' . $directory);
+    } else {
+        ok($directory . ' already exists');
+    }
 }
 
 // ---------- .env ----------
@@ -187,7 +255,12 @@ if (is_file($env_path)) {
 
     $lines = [];
     foreach ($defaults as $key => $default) {
-        $value = isset($prompts[$key]) ? prompt($prompts[$key], $default) : $default;
+        // Never written from a prompt's plain answer - the file stores a hash,
+        // and the password itself must not end up on disk anywhere.
+        $value = $key === 'AUTH_PASSWORD_HASH'
+            ? prompt_password_hash()
+            : (isset($prompts[$key]) ? prompt($prompts[$key], $default) : $default);
+
         $lines[] = $key . '=' . $value;
     }
 
@@ -195,6 +268,46 @@ if (is_file($env_path)) {
 ', $lines) . '
 ');
     ok('Wrote .env');
+}
+
+// An .env written before this key existed has no way to sign in at all, and
+// Auth deliberately fails closed on a blank hash rather than letting everyone
+// through - so an existing file missing it gets the same prompt, appended.
+if (Env::get('AUTH_PASSWORD_HASH', '') === '') {
+    $hash = prompt_password_hash();
+
+    if ($hash === '') {
+        warn('No login password set - nobody can sign in until AUTH_PASSWORD_HASH is filled in in .env.');
+    } else {
+        set_env_line($env_path, 'AUTH_PASSWORD_HASH', $hash);
+        ok('Set AUTH_PASSWORD_HASH in .env');
+    }
+}
+
+/**
+ * Asks for the operator login password (twice, since it's never echoed and a
+ * typo would otherwise lock the installer out of its own site) and returns
+ * its hash.
+ */
+function prompt_password_hash(): string
+{
+    if (!is_interactive()) {
+        return '';
+    }
+
+    while (true) {
+        $password = prompt_secret('Login password for the search UI (blank to skip)');
+
+        if ($password === '') {
+            return '';
+        }
+
+        if ($password === prompt_secret('Repeat it')) {
+            return password_hash($password, PASSWORD_DEFAULT);
+        }
+
+        fail_line('Those didn\'t match, try again.');
+    }
 }
 
 // ---------- Database ----------
@@ -327,6 +440,29 @@ SHOW COLUMNS
 ');
 
     return $result !== false && mysqli_num_rows($result) > 0;
+}
+
+/**
+ * A column's declared type, lowercased ('mediumtext', 'varchar(255)'), or ''
+ * if there's no such column - for deltas that change a column's type rather
+ * than add one, where its mere existence says nothing about whether the
+ * delta has been applied.
+ */
+function column_type(string $table, string $column): string
+{
+    $select = mysqli_prepare(Database::connection(), '
+SELECT `COLUMN_TYPE`
+    FROM `information_schema`.`COLUMNS`
+    WHERE `TABLE_SCHEMA` = DATABASE()
+        AND `TABLE_NAME` = ?
+        AND `COLUMN_NAME` = ?
+    LIMIT 1
+');
+    mysqli_stmt_bind_param($select, 'ss', $table, $column);
+    mysqli_stmt_execute($select);
+    $row = mysqli_fetch_assoc(mysqli_stmt_get_result($select));
+
+    return $row !== null ? strtolower($row['COLUMN_TYPE']) : '';
 }
 
 /**
@@ -515,6 +651,242 @@ ALTER TABLE `Items`
 ');
             },
         ],
+        [
+            // Everything that reads the queue orders by crawledTime alone -
+            // Item::nextToCrawl() to pick the next item, api/recent-items.php
+            // to seed the live feed. hostId_crawledTime can't serve either
+            // (its leading column is hostId), so both were scanning the whole
+            // table and sorting it on every single call.
+            'name' => 'add_crawledtime_index_to_items',
+            'check' => fn () => index_exists('Items', 'crawledTime'),
+            'apply' => function (): void {
+                run_sql('
+ALTER TABLE `Items`
+    ADD KEY `crawledTime` (`crawledTime`)
+');
+            },
+        ],
+        [
+            // robotsTxt on its own can't say whether an empty value means "we
+            // asked and the host has no rules" or "we couldn't reach it" -
+            // and the second must never be read as permission to crawl. These
+            // two record which it was and when, so a failure can be retried
+            // rather than cached as a permanent all-clear (see Host).
+            'name' => 'add_robotstxt_freshness_to_hosts',
+            'check' => fn () => column_exists('Hosts', 'robotsTxtFetchedTime') && column_exists('Hosts', 'robotsTxtFetched'),
+            'apply' => function (): void {
+                run_sql('
+ALTER TABLE `Hosts`
+    ADD COLUMN `robotsTxtFetched` tinyint(1) unsigned NOT NULL DEFAULT 0 AFTER `robotsTxt`,
+    ADD COLUMN `robotsTxtFetchedTime` int(10) unsigned DEFAULT NULL AFTER `robotsTxtFetched`
+');
+
+                // Every existing row predates the distinction, so none of
+                // them can say which case its robotsTxt represents. Cleared
+                // rather than guessed: robotsTxtFetchedTime NULL is exactly
+                // "never fetched", so each host re-asks once and records a
+                // real answer the first time it's crawled again.
+                run_sql('
+UPDATE `Hosts`
+    SET `robotsTxt` = NULL
+');
+            },
+        ],
+        [
+            // A URL the crawler already resolved as unusable (a 404, a
+            // non-HTML body, a broken redirect) gets its Items row deleted -
+            // which means the very next recrawl of any page linking to it
+            // creates it again, fetches it again, and deletes it again,
+            // forever. This remembers the verdict so it can be skipped at
+            // discovery instead.
+            'name' => 'create_deadurls_table',
+            'check' => fn () => table_exists('DeadURLs'),
+            'apply' => function (): void {
+                run_sql('
+CREATE TABLE `DeadURLs` (
+  `deadURLId` int(10) unsigned NOT NULL AUTO_INCREMENT,
+  `url` varchar(767) NOT NULL,
+  `reason` varchar(50) NOT NULL,
+  `deadTime` int(10) unsigned NOT NULL,
+  PRIMARY KEY (`deadURLId`),
+  UNIQUE KEY `url` (`url`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci');
+            },
+        ],
+        [
+            // TEXT holds 64 KiB, and real robots.txt files exceed that -
+            // linkedin.com's does, and storing it threw "Data too long" and
+            // killed the worker outright. MEDIUMTEXT comfortably covers the
+            // 500 KiB Host reads at most (see MAX_ROBOTS_TXT_BYTES, which is
+            // the limit Google documents for its own parser).
+            'name' => 'widen_hosts_robotstxt',
+            'check' => fn () => column_type('Hosts', 'robotsTxt') === 'mediumtext',
+            'apply' => function (): void {
+                run_sql('
+ALTER TABLE `Hosts`
+    MODIFY COLUMN `robotsTxt` mediumtext DEFAULT NULL
+');
+            },
+        ],
+        [
+            // The focused-crawl topic used to be a file in the project
+            // directory, which meant the web server needed write access
+            // inside the checkout purely so a web request could hand a string
+            // to a CLI process - and that one requirement is what the whole
+            // ACL/SELinux setup existed to satisfy. Both sides already share
+            // this database.
+            'name' => 'create_settings_table',
+            'check' => fn () => table_exists('Settings'),
+            'apply' => function (): void {
+                run_sql('
+CREATE TABLE `Settings` (
+  `settingId` int(10) unsigned NOT NULL AUTO_INCREMENT,
+  `name` varchar(64) NOT NULL,
+  `value` text NOT NULL,
+  PRIMARY KEY (`settingId`),
+  UNIQUE KEY `name` (`name`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci');
+
+                // Carry over whatever topic the old file held, so a running
+                // focused crawl isn't silently reset by this upgrade.
+                $legacyTopicFile = ROOT_DIR . '/crawl-topic';
+
+                if (is_file($legacyTopicFile)) {
+                    Setting::store(CRAWL_TOPIC_SETTING, trim((string) file_get_contents($legacyTopicFile)));
+                }
+            },
+        ],
+        [
+            // Request budgets for the public endpoints (see RateLimit). The
+            // primary key is what makes counting a request a single atomic
+            // upsert, and windowStart is indexed on its own so clearing out
+            // finished windows doesn't scan the table.
+            'name' => 'create_ratelimits_table',
+            'check' => fn () => table_exists('RateLimits'),
+            'apply' => function (): void {
+                run_sql('
+CREATE TABLE `RateLimits` (
+  `bucket` varchar(16) NOT NULL,
+  `identifier` varchar(64) NOT NULL,
+  `windowStart` int(10) unsigned NOT NULL,
+  `requests` int(10) unsigned NOT NULL,
+  PRIMARY KEY (`bucket`,`identifier`,`windowStart`),
+  KEY `windowStart` (`windowStart`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci');
+            },
+        ],
+        [
+            // A page can opt out of being indexed (meta robots / X-Robots-Tag
+            // noindex) while still being crawled for its links - so it keeps
+            // its row and its crawledTime, and search just never returns it.
+            'name' => 'add_noindex_to_items',
+            'check' => fn () => column_exists('Items', 'noindex'),
+            'apply' => function (): void {
+                run_sql('
+ALTER TABLE `Items`
+    ADD COLUMN `noindex` tinyint(1) unsigned NOT NULL DEFAULT 0 AFTER `crawledTime`
+');
+            },
+        ],
+        [
+            // Adaptive recrawl (see Item::markCrawled()): contentHash is what
+            // the last crawl's text hashed to, recrawlAfterSeconds is how
+            // long this item waits before being crawled again - doubled each
+            // time the content comes back unchanged, reset when it differs.
+            'name' => 'add_recrawl_columns_to_items',
+            'check' => fn () => column_exists('Items', 'contentHash') && column_exists('Items', 'recrawlAfterSeconds'),
+            'apply' => function (): void {
+                run_sql('
+ALTER TABLE `Items`
+    ADD COLUMN `contentHash` char(40) DEFAULT NULL AFTER `noindex`,
+    ADD COLUMN `recrawlAfterSeconds` int(10) unsigned NOT NULL DEFAULT 604800 AFTER `contentHash`
+');
+            },
+        ],
+        [
+            // crawlDelaySeconds carries a robots.txt Crawl-delay wish;
+            // consecutiveFailures counts connection-level failures in a row,
+            // driving an escalating host-wide backoff instead of item
+            // deletion (a connection failure is about the host, not the URL).
+            'name' => 'add_crawldelay_failures_to_hosts',
+            'check' => fn () => column_exists('Hosts', 'crawlDelaySeconds') && column_exists('Hosts', 'consecutiveFailures'),
+            'apply' => function (): void {
+                run_sql('
+ALTER TABLE `Hosts`
+    ADD COLUMN `crawlDelaySeconds` int(10) unsigned DEFAULT NULL AFTER `robotsTxtFetchedTime`,
+    ADD COLUMN `consecutiveFailures` smallint(5) unsigned NOT NULL DEFAULT 0 AFTER `crawlDelaySeconds`
+');
+            },
+        ],
+        [
+            // fullHTML is stored gzip-compressed from here on (see
+            // Item::markCrawled()) - it's the whole raw page, kept only for
+            // future re-processing, and compresses to about a quarter of its
+            // size. LONGBLOB because compressed bytes aren't utf8mb4 text.
+            // Rows written before this stay uncompressed and are told apart
+            // by the gzip magic bytes when read.
+            'name' => 'convert_fullhtml_to_longblob',
+            'check' => fn () => column_type('Items', 'fullHTML') === 'longblob',
+            'apply' => function (): void {
+                run_sql('
+ALTER TABLE `Items`
+    MODIFY COLUMN `fullHTML` longblob DEFAULT NULL
+');
+            },
+        ],
+        [
+            // The crawledTime index gains type as a second column and the
+            // single-column version goes: every reader either filters or
+            // orders on crawledTime alone (still served identically by the
+            // leading column) or, like the home page's page/image counts,
+            // wants type for exactly the rows a crawledTime range selects -
+            // which the composite answers from the index alone instead of
+            // touching each crawled row.
+            'name' => 'widen_items_crawledtime_index_with_type',
+            'check' => fn () => index_exists('Items', 'crawledTime_type'),
+            'apply' => function (): void {
+                run_sql('
+ALTER TABLE `Items`
+    DROP KEY `crawledTime`,
+    ADD KEY `crawledTime_type` (`crawledTime`, `type`)
+');
+            },
+        ],
+        [
+            // Every queue pick asks "which hosts are due" - unindexed, that
+            // was a full Hosts scan per pick, invisible at a few thousand
+            // hosts and a scan of the whole table once hosts number in the
+            // hundreds of thousands. NULL (never crawled) and <= now both
+            // sit at the front of this index, so the due set is one ordered
+            // range read.
+            'name' => 'add_nextcrawltime_index_to_hosts',
+            'check' => fn () => index_exists('Hosts', 'nextCrawlTime'),
+            'apply' => function (): void {
+                run_sql('
+ALTER TABLE `Hosts`
+    ADD KEY `nextCrawlTime` (`nextCrawlTime`)
+');
+            },
+        ],
+        [
+            // "Is this item due for a recrawl" was crawledTime +
+            // recrawlAfterSeconds <= now - arithmetic no index can serve, so
+            // finding the next due recrawl meant walking crawled rows until
+            // one passed, and walking every one of them when none did. The
+            // stored generated column makes due-ness a plain indexed range:
+            // NULL for uncrawled rows (excluded from any <= comparison for
+            // free), maintained by the database whenever either operand
+            // changes.
+            'name' => 'add_recrawlduetime_to_items',
+            'check' => fn () => column_exists('Items', 'recrawlDueTime'),
+            'apply' => function (): void {
+                run_sql('
+ALTER TABLE `Items`
+    ADD COLUMN `recrawlDueTime` int(10) unsigned GENERATED ALWAYS AS (`crawledTime` + `recrawlAfterSeconds`) STORED AFTER `recrawlAfterSeconds`,
+    ADD KEY `recrawlDueTime` (`recrawlDueTime`)
+');
+            },
+        ],
     ];
 }
 
@@ -577,46 +949,197 @@ heading('Fetching TLD list');
 TLDs::warm();
 ok('TLD list ready');
 
-// ---------- Web server ----------
+
+// ---------- Manual setup ----------
 //
-// Apache vhost + SELinux/ACL setup can't be done by this script itself (it
-// needs root, and this script intentionally never asks for sudo). Printed
-// here as a record of the exact steps taken on the dev machine, and as
-// instructions for setting up a fresh box the same way.
+// Creating a user, writing a vhost, labelling files for SELinux and
+// installing a systemd unit all need root, and this script intentionally
+// never asks for sudo. They're printed instead - with this install's real
+// paths filled in, so they can be pasted rather than hand-edited.
+//
+// Nothing here is specific to the machine this was developed on: the project
+// path, the PHP binary, the web server's user and the number of worker slots
+// are all read from the environment this is running in.
 
-heading('Web server (run manually, needs sudo)');
-echo <<<'SHELL'
+/**
+ * The account the web server runs as - "apache" on Fedora/RHEL, "www-data" on
+ * Debian/Ubuntu, something else again elsewhere. Detected rather than assumed,
+ * since guessing wrong produces setup commands that fail on half the distros
+ * this could be installed on.
+ */
+function web_server_user(): string
+{
+    $running = trim((string) shell_exec('ps -eo user,comm 2>/dev/null | grep -E \'httpd|apache2|nginx\' | grep -v root | head -1 | cut -d\' \' -f1'));
+
+    if ($running !== '') {
+        return $running;
+    }
+
+    foreach (['apache', 'www-data', 'nginx', 'http'] as $candidate) {
+        if (user_exists($candidate)) {
+            return $candidate;
+        }
+    }
+
+    return 'apache';
+}
+
+$service_user = 'duskrail';
+$web_user = web_server_user();
+
+// Whoever owns the checkout - they edit .env and run the CLI scripts by hand,
+// so the permissions below have to keep working for them as well as for the
+// two service accounts. Read from the filesystem rather than assumed to be
+// whoever happens to be running this installer.
+$owner = file_owner_name(ROOT_DIR) ?? get_current_user();
+$php_binary = PHP_BINARY;
+$root = ROOT_DIR;
+$var_dir = VAR_DIR;
+$site_host = parse_url($config['siteURL'], PHP_URL_HOST) ?: 'duskrail.localhost';
+
+// The web server only ever reads the checkout, so it needs traverse (x) on
+// every directory above it. Listed explicitly because a checkout under a home
+// directory is the common case and home directories are not world-traversable.
+$traversal_paths = [];
+$path = dirname($root);
+
+while ($path !== '/' && $path !== '' && $path !== '.') {
+    $traversal_paths[] = $path;
+    $path = dirname($path);
+}
+
+$traversal = implode(' ', array_reverse($traversal_paths));
+
+heading('Service account and permissions (run manually, needs sudo)');
+echo <<<SHELL
+# The crawler runs as its own system account rather than as the web server's.
+# It is a daemon that drives a browser and writes to disk for hours at a time;
+# the web server's account is shared by every other site on the machine, and
+# neither should be able to reach the other's files just by existing.
+sudo useradd --system --no-create-home --home-dir /var/lib/{$service_user} --shell /sbin/nologin {$service_user}
+
+# The three directories the crawler writes: thumbnails (served by the web
+# server, so it reads them too), the TLD cache, and its own run state. The
+# checkout itself stays owned by whoever cloned it and is never writable by
+# either service - nothing in it needs to be. The default ACL (d:) is what
+# makes files the crawler creates later inherit the same access, rather than
+# only the directories that exist right now having it.
+sudo chown -R {$service_user}: {$root}/thumbnails {$root}/data {$var_dir}
+sudo chmod 755 {$root}/thumbnails {$root}/data {$var_dir}
+sudo setfacl -R -m u:{$owner}:rwX -m d:u:{$owner}:rwX {$root}/thumbnails {$root}/data {$var_dir}
+
+# .env holds the database credentials and the login hash. Owned by the person
+# who edits it, read by the two services that need it, and by nobody else -
+# note read only, since neither service ever writes it.
+sudo chown {$owner}: {$root}/.env
+sudo chmod 600 {$root}/.env
+sudo setfacl -m u:{$service_user}:r -m u:{$web_user}:r {$root}/.env
+
+# The web server reads the checkout and needs to traverse into it.
+sudo setfacl -m u:{$web_user}:x {$traversal}
+sudo setfacl -m u:{$service_user}:x {$traversal}
+
+SHELL;
+
+if (trim((string) shell_exec('command -v getenforce 2>/dev/null')) !== '') {
+    echo <<<SHELL
+# SELinux: the checkout is web content, and the two directories the web server
+# reads or writes are labelled accordingly. Registered with semanage, not just
+# applied with chcon, so the labels survive a relabel.
+sudo semanage fcontext -a -t httpd_sys_content_t "{$root}(/.*)?"
+sudo semanage fcontext -a -t httpd_sys_rw_content_t "{$root}/thumbnails(/.*)?"
+sudo restorecon -Rv {$root}
+
+SHELL;
+
+    if (str_starts_with($root, '/home/')) {
+        echo <<<SHELL
+# The checkout lives under a home directory, which the web server is not
+# allowed to read from by default.
+sudo setsebool -P httpd_enable_homedirs on
+
+SHELL;
+    }
+}
+
+// ---------- Web server ----------
+
+heading('Web server vhost (run manually, needs sudo)');
+echo <<<SHELL
 sudo tee /etc/httpd/conf.d/duskrail.conf > /dev/null <<'EOF'
+# Plain HTTP exists only to send everyone to HTTPS - the session and
+# rate-limit cookies are Secure-only, so a page served over HTTP wouldn't
+# work properly anyway.
 <VirtualHost *:80>
-    ServerName duskrail.local
-    DocumentRoot /path/to/DuskRail
+    ServerName {$site_host}
+    Redirect permanent / https://{$site_host}/
+</VirtualHost>
 
-    <Directory /path/to/DuskRail>
+<VirtualHost *:443>
+    ServerName {$site_host}
+    DocumentRoot {$root}
+
+    <Directory {$root}>
         AllowOverride All
         Require all granted
     </Directory>
 
-    ErrorLog /var/log/httpd/duskrail-error.log
-    CustomLog /var/log/httpd/duskrail-access.log combined
+    # Nothing under these is ever a URL - the crawler's run state, the
+    # environment file, and the CLI entry points. Denied at the web server
+    # rather than relied on to be unreachable by convention.
+    <DirectoryMatch "{$root}/(var|bin|src)">
+        Require all denied
+    </DirectoryMatch>
+
+    <Files ".env">
+        Require all denied
+    </Files>
+
+    SSLEngine on
+    SSLCertificateFile /etc/pki/tls/certs/duskrail-mkcert.pem
+    SSLCertificateKeyFile /etc/pki/tls/private/duskrail-mkcert-key.pem
+
+    Header always set Strict-Transport-Security "max-age=31536000"
+
+    ErrorLog /var/log/httpd/duskrail-ssl-error.log
+    CustomLog /var/log/httpd/duskrail-ssl-access.log combined
 </VirtualHost>
 EOF
-echo "127.0.0.1 duskrail.local" | sudo tee -a /etc/hosts > /dev/null
-sudo setfacl -m u:apache:x /path/to
-sudo setsebool -P httpd_enable_homedirs on
-sudo semanage fcontext -a -t httpd_sys_content_t "/path/to/DuskRail(/.*)?"
-sudo restorecon -Rv /path/to/DuskRail
+
+SHELL;
+
+// A name under .localhost resolves to this machine in every modern browser
+// (they hardwire it, per RFC 6761) and, on systemd-resolved systems, for
+// every program - no hosts entry needed or printed. Anything else does need
+// one, since it isn't a name any DNS server will answer for.
+if (!str_ends_with($site_host, '.localhost') && $site_host !== 'localhost') {
+    echo <<<SHELL
+echo "127.0.0.1 {$site_host}" | sudo tee -a /etc/hosts > /dev/null
+
+SHELL;
+}
+
+echo <<<SHELL
+# A locally-trusted certificate for this site, in its own file. Never reuse
+# or regenerate a certificate file another vhost points at (e.g. the stock
+# ssl.conf's localhost-mkcert.pem): regenerating a shared file with only this
+# site's names silently breaks TLS for every other name that was on it.
+mkcert -cert-file /tmp/duskrail-mkcert.pem -key-file /tmp/duskrail-mkcert-key.pem {$site_host}
+sudo cp /tmp/duskrail-mkcert.pem /etc/pki/tls/certs/duskrail-mkcert.pem
+sudo cp /tmp/duskrail-mkcert-key.pem /etc/pki/tls/private/duskrail-mkcert-key.pem
+sudo chown root:root /etc/pki/tls/certs/duskrail-mkcert.pem /etc/pki/tls/private/duskrail-mkcert-key.pem
+sudo chmod 644 /etc/pki/tls/certs/duskrail-mkcert.pem
+sudo chmod 600 /etc/pki/tls/private/duskrail-mkcert-key.pem
+rm /tmp/duskrail-mkcert.pem /tmp/duskrail-mkcert-key.pem
+
 sudo apachectl configtest && sudo systemctl reload httpd
 
 SHELL;
 
 // ---------- Crawler service ----------
-//
-// A systemd service that runs bin/crawler-manager.php as apache. Same as the
-// vhost above, this needs root so it's printed rather than run. Deliberately
-// left disabled (no boot-start) and stopped - it's started by hand.
 
 heading('Crawler service (run manually, needs sudo)');
-echo <<<'SHELL'
+echo <<<SHELL
 sudo tee /etc/systemd/system/duskrail-crawler.service > /dev/null <<'EOF'
 [Unit]
 Description=DuskRail crawler manager (supervises bin/crawler.php workers)
@@ -625,10 +1148,10 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=apache
-Group=apache
-WorkingDirectory=/path/to/DuskRail
-ExecStart=/usr/bin/php /path/to/DuskRail/bin/crawler-manager.php
+User={$service_user}
+Group={$service_user}
+WorkingDirectory={$root}
+ExecStart={$php_binary} {$root}/bin/crawler-manager.php
 # SIGTERM to the manager alone (not the whole cgroup) so it can drain workers
 # gracefully - it stops spawning and exits once every in-flight worker has
 # finished its current item (crawler.php ignores SIGTERM). Anything still
@@ -636,25 +1159,25 @@ ExecStart=/usr/bin/php /path/to/DuskRail/bin/crawler-manager.php
 KillMode=mixed
 TimeoutStopSec=120
 Restart=no
+# Chrome refuses to start at all without a writable HOME - its crash handler
+# is initialised before anything else and has no fallback. systemd creates and
+# owns this directory for the service account.
+StateDirectory={$service_user}
+Environment=HOME=%S/{$service_user}
+# Each browser profile goes in a temp directory of its own; this keeps them
+# out of the shared /tmp and takes them with the service when it stops.
+PrivateTmp=true
+# systemd hands services a 1024 soft file-descriptor limit and expects a
+# daemon needing more to raise it itself. Chrome does not, and a browser
+# driving several tabs over TLS exhausts 1024 easily - at which point requests
+# start failing, which the crawler can only read as "this URL is unreachable"
+# and deletes good items over. An interactive shell sits at 524288 already,
+# so running the manager by hand never shows this.
+LimitNOFILE=524288
 
 [Install]
 WantedBy=multi-user.target
 EOF
-
-# The manager runs as apache; its workers write thumbnails, the TLD cache
-# (data/), and one crawler-current-item-N per worker slot (WORKER_COUNT in
-# bin/crawler-manager.php, currently 3). Grant apache write to exactly those:
-# DAC via ACL (keeps its existing ownership, so manual `php bin/crawler-manager.php`
-# runs as the owner still work) and MAC via the httpd_sys_rw_content_t label, the
-# same label crawl-topic already carries.
-for n in 0 1 2; do : > /path/to/DuskRail/crawler-current-item-$n; done
-sudo setfacl -R -m u:apache:rwX -m d:u:apache:rwX /path/to/DuskRail/thumbnails /path/to/DuskRail/data
-for n in 0 1 2; do sudo setfacl -m u:apache:rw /path/to/DuskRail/crawler-current-item-$n; done
-sudo semanage fcontext -a -t httpd_sys_rw_content_t "/path/to/DuskRail/thumbnails(/.*)?"
-sudo semanage fcontext -a -t httpd_sys_rw_content_t "/path/to/DuskRail/data(/.*)?"
-sudo semanage fcontext -a -t httpd_sys_rw_content_t "/path/to/DuskRail/crawler-current-item.*"
-sudo restorecon -Rv /path/to/DuskRail/thumbnails /path/to/DuskRail/data
-for n in 0 1 2; do sudo restorecon /path/to/DuskRail/crawler-current-item-$n; done
 sudo systemctl daemon-reload
 
 # Left disabled (no boot-start) and stopped on purpose - drive it by hand:

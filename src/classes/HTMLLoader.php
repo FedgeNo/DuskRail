@@ -3,11 +3,13 @@
 declare(strict_types=1);
 
 /**
- * Parses an HTML document's bytes into a DOMDocument, given the charset the
- * server declared (Content-Type's charset param). This is the bare version -
- * no <meta charset> sniffing when the header didn't declare one, no BOM
- * detection, no base-tag handling. Those all matter for a real crawl and are
- * coming later; for now this just needs to not mangle the common case.
+ * Parses an HTML document's bytes into a DOMDocument. The charset comes from
+ * the strongest signal available, in the order the WHATWG algorithm ranks
+ * them: a byte-order mark outranks everything (it's the encoder itself
+ * speaking), then the Content-Type header's charset parameter, then a <meta
+ * charset> sniffed from the first bytes of the document, then UTF-8. Legacy
+ * pages routinely declare their encoding only in the markup, and reading
+ * those as UTF-8 indexed their entire text as mojibake.
  */
 class HTMLLoader
 {
@@ -53,6 +55,15 @@ class HTMLLoader
 
     public static function load(string $html, ?string $charset): \DOMDocument
     {
+        $bomCharset = self::bomCharset($html);
+
+        if ($bomCharset !== null) {
+            $charset = $bomCharset;
+            $html = substr($html, $bomCharset === 'UTF-8' ? 3 : 2);
+        } elseif ($charset === null) {
+            $charset = self::sniffMetaCharset($html);
+        }
+
         $charset = strtoupper($charset ?? 'UTF-8');
 
         if (!in_array($charset, ['UTF-8', 'UTF8'], true)) {
@@ -93,6 +104,74 @@ class HTMLLoader
     }
 
     /**
+     * The encoding a byte-order mark declares, or null when there isn't one.
+     * A BOM outranks every header and meta tag - it was written by whatever
+     * encoded the file, so it can't be out of step with the bytes the way a
+     * copy-pasted meta tag or a misconfigured server header can.
+     */
+    private static function bomCharset(string $html): ?string
+    {
+        if (str_starts_with($html, chr(0xEF) . chr(0xBB) . chr(0xBF))) {
+            return 'UTF-8';
+        }
+
+        if (str_starts_with($html, chr(0xFF) . chr(0xFE))) {
+            return 'UTF-16LE';
+        }
+
+        if (str_starts_with($html, chr(0xFE) . chr(0xFF))) {
+            return 'UTF-16BE';
+        }
+
+        return null;
+    }
+
+    /**
+     * The charset declared in the document's own markup - "<meta
+     * charset=...>" or the older http-equiv Content-Type form, both of which
+     * reduce to finding "charset", an equals sign, and a name. Only the
+     * first 2 KiB is searched, per the sniffing convention browsers follow:
+     * a real declaration sits at the top of <head>, and anything claiming to
+     * be one deep in the body text isn't.
+     */
+    private static function sniffMetaCharset(string $html): ?string
+    {
+        $head = substr($html, 0, 2048);
+        $position = stripos($head, 'charset');
+
+        while ($position !== false) {
+            $cursor = $position + strlen('charset');
+
+            while ($cursor < strlen($head) && ($head[$cursor] === ' ' || $head[$cursor] === chr(9))) {
+                $cursor++;
+            }
+
+            if ($cursor < strlen($head) && $head[$cursor] === '=') {
+                $cursor++;
+
+                while ($cursor < strlen($head) && in_array($head[$cursor], [' ', chr(9), '"', chr(39)], true)) {
+                    $cursor++;
+                }
+
+                $name = '';
+
+                while ($cursor < strlen($head) && (ctype_alnum($head[$cursor]) || in_array($head[$cursor], ['-', '_', '.'], true))) {
+                    $name .= $head[$cursor];
+                    $cursor++;
+                }
+
+                if ($name !== '') {
+                    return $name;
+                }
+            }
+
+            $position = stripos($head, 'charset', $position + 1);
+        }
+
+        return null;
+    }
+
+    /**
      * The URL every other relative link on the page actually resolves
      * against. Normally that's just the page's own URL, but a <base href>
      * overrides it - and that href is itself often relative (e.g. "/en/"),
@@ -117,6 +196,114 @@ class HTMLLoader
         }
 
         return $pageURL;
+    }
+
+    /**
+     * The page-level robots directives - meta name="robots" - as
+     * ['noindex' => bool, 'nofollow' => bool]. "none" is shorthand for both,
+     * per the spec. The crawler honors these the way it honors robots.txt:
+     * noindex keeps the page out of search results (it's still crawled, and
+     * its links still count), nofollow stops link discovery on the page.
+     */
+    public static function robotsDirectives(\DOMDocument $document): array
+    {
+        $content = strtolower((string) self::metaContent($document, 'name', 'robots'));
+        $tokens = array_map('trim', explode(',', $content));
+
+        $none = in_array('none', $tokens, true);
+
+        return [
+            'noindex' => $none || in_array('noindex', $tokens, true),
+            'nofollow' => $none || in_array('nofollow', $tokens, true),
+        ];
+    }
+
+    /**
+     * The page's declared canonical URL (<link rel="canonical">), resolved
+     * and validated, or null when there isn't a usable one. Only the first
+     * counts, same as <base>. A canonical equal to the page's own URL - by
+     * far the common case - is still returned; the caller compares.
+     */
+    public static function canonicalURL(\DOMDocument $document, URL $baseURL): ?URL
+    {
+        foreach ($document -> getElementsByTagName('link') as $link) {
+            $rel = preg_split('/\s+/', strtolower($link -> getAttribute('rel')), -1, PREG_SPLIT_NO_EMPTY);
+
+            if (!in_array('canonical', $rel, true)) {
+                continue;
+            }
+
+            $href = trim($link -> getAttribute('href'));
+
+            if ($href === '') {
+                return null;
+            }
+
+            $resolved = $baseURL -> resolve(new URL($href));
+
+            return $resolved -> isValid() ? $resolved : null;
+        }
+
+        return null;
+    }
+
+    /**
+     * Tags whose boundaries separate text when a browser renders them -
+     * injected as newlines before textContent is ever read. textContent
+     * itself concatenates everything with no separators at all, which reads
+     * fine on pretty-printed markup (the source's own indentation supplies
+     * the whitespace) and glues words together on minified markup:
+     * "<h1>Title</h1><p>First" extracts as "TitleFirst" without this.
+     */
+    private const BLOCK_TAGS = [
+        'address', 'article', 'aside', 'blockquote', 'dd', 'details', 'div', 'dl', 'dt',
+        'fieldset', 'figcaption', 'figure', 'footer', 'form', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
+        'header', 'hr', 'li', 'main', 'nav', 'ol', 'p', 'pre', 'section', 'summary', 'table', 'tr', 'ul',
+    ];
+
+    // Cells sit side by side on one rendered line, so they separate with a
+    // space rather than a line break.
+    private const CELL_TAGS = ['td', 'th'];
+
+    /**
+     * Injects the whitespace a renderer's line-breaking would have implied,
+     * so a plain textContent walk afterwards reads like the visible page:
+     * a newline on each side of every block-level element (the pair around
+     * adjacent blocks collapses to one paragraph break in
+     * normalizeWhitespace()), a newline after each <br>, a space after each
+     * table cell. Run right after load(), before anything reads text out of
+     * the document - the per-anchor/per-image description walks need it as
+     * much as the body text does.
+     */
+    public static function separateBlockElements(\DOMDocument $document): void
+    {
+        $newline = chr(10);
+
+        foreach (self::BLOCK_TAGS as $tagName) {
+            foreach (iterator_to_array($document -> getElementsByTagName($tagName)) as $element) {
+                $element -> parentNode ?-> insertBefore($document -> createTextNode($newline), $element);
+                $element -> appendChild($document -> createTextNode($newline));
+            }
+        }
+
+        foreach (iterator_to_array($document -> getElementsByTagName('br')) as $break) {
+            $break -> parentNode ?-> insertBefore($document -> createTextNode($newline), $break -> nextSibling);
+        }
+
+        foreach (self::CELL_TAGS as $tagName) {
+            foreach (iterator_to_array($document -> getElementsByTagName($tagName)) as $cell) {
+                $cell -> appendChild($document -> createTextNode(' '));
+            }
+        }
+
+        // Images get a space on each side: inlineImageAltText() expands alt
+        // text inside them, and without the outer spacing that text lands
+        // flush against whatever surrounds the tag - and an alt-less image
+        // between two words would glue them outright.
+        foreach (iterator_to_array($document -> getElementsByTagName('img')) as $img) {
+            $img -> parentNode ?-> insertBefore($document -> createTextNode(' '), $img);
+            $img -> parentNode ?-> insertBefore($document -> createTextNode(' '), $img -> nextSibling);
+        }
     }
 
     /**
@@ -205,6 +392,16 @@ class HTMLLoader
             $href = trim($anchor -> getAttribute('href'));
 
             if ($href === '') {
+                continue;
+            }
+
+            // rel=nofollow (and its ugc/sponsored refinements) is the page
+            // saying "this link is not my endorsement" - comment spam, paid
+            // placements, user uploads. Following them anyway is how a
+            // crawler gets steered by exactly the links pages trust least.
+            $rel = preg_split('/\s+/', strtolower($anchor -> getAttribute('rel')), -1, PREG_SPLIT_NO_EMPTY);
+
+            if (array_intersect(['nofollow', 'ugc', 'sponsored'], $rel) !== []) {
                 continue;
             }
 
@@ -379,8 +576,12 @@ class HTMLLoader
      * flattened while an actual paragraph break survives as one. No space
      * is ever left touching a newline (leading/trailing on a paragraph),
      * only the newline itself separates paragraphs.
+     *
+     * Public because it's the right treatment for any crawled text, not just
+     * what came out of a DOM walk - the plain-text and PDF paths in
+     * bin/crawler.php produce raw text with the same problem.
      */
-    private static function normalizeWhitespace(string $text): string
+    public static function normalizeWhitespace(string $text): string
     {
         $text = str_replace([chr(13) . chr(10), chr(13)], chr(10), $text);
         $text = preg_replace('/[^\S\n]+/', ' ', $text);

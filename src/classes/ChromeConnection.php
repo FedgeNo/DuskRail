@@ -34,7 +34,7 @@ class ChromeConnection
     // response, not a tight budget.
     private const MAX_BODY_SIZE = 20 * 1024 * 1024;
 
-    // Same identity HTTPConnection presents - kept here too (istead of a
+    // Same identity HTTPConnection presents - kept here too (instead of a
     // shared constant) since this class overrides Chrome's own real UA
     // entirely, for a different reason: Chrome's real one says
     // "HeadlessChrome" and a Linux platform outright, which is a bot tell no

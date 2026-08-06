@@ -15,8 +15,23 @@ declare(strict_types=1);
 class ChromeProcess
 {
     private const CANDIDATE_BINARIES = ['chromium-browser', 'google-chrome', 'chromium', 'google-chrome-stable'];
-    private const LAUNCH_TIMEOUT_SECONDS = 5.0;
+
+    // Chrome's cold start is normally a second or two, but a machine that's
+    // already busy crawling - or one that just tore down the outgoing
+    // instance of a rotation - can take considerably longer. Too tight a
+    // budget here doesn't fail safe: it reports a browser that was coming up
+    // fine as dead, kills it, and starts another one behind it.
+    private const LAUNCH_TIMEOUT_SECONDS = 20.0;
+
     private const HEALTH_CHECK_TIMEOUT_SECONDS = 3;
+
+    // Every instance's private profile directory lives under this prefix in
+    // the system temp directory, with the browser's pid written inside - so a
+    // manager starting up can find and clean up after one that was killed
+    // outright and never got to shut its own browser down (see
+    // sweepAbandoned()).
+    private const USER_DATA_DIR_PREFIX = 'duskrail-chrome-';
+    private const PID_FILE = 'duskrail-chrome.pid';
 
     /** @var resource */
     private $process;
@@ -34,7 +49,7 @@ class ChromeProcess
             throw new \RuntimeException('No headless Chrome/Chromium binary found');
         }
 
-        $this -> userDataDir = sys_get_temp_dir() . '/duskrail-chrome-' . bin2hex(random_bytes(8));
+        $this -> userDataDir = sys_get_temp_dir() . '/' . self::USER_DATA_DIR_PREFIX . bin2hex(random_bytes(8));
         mkdir($this -> userDataDir, 0700, true);
 
         $descriptors = [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']];
@@ -53,6 +68,7 @@ class ChromeProcess
 
         $this -> process = $process;
         $this -> pipes = $pipes;
+        file_put_contents($this -> userDataDir . '/' . self::PID_FILE, (string) proc_get_status($process)['pid']);
         fclose($this -> pipes[0]);
         stream_set_blocking($this -> pipes[1], false);
         stream_set_blocking($this -> pipes[2], false);
@@ -72,6 +88,69 @@ class ChromeProcess
     public function ageSeconds(): float
     {
         return microtime(true) - $this -> startedAt;
+    }
+
+    /**
+     * Kills any browser left behind by a previous manager and removes its
+     * profile directory. shutdown() handles the ordinary exits; this is for
+     * the ones where the manager never got to run it - SIGKILL, a crash, a
+     * machine that went down - after which the browser it owned goes on
+     * running, holding its memory and its port, with nothing left that knows
+     * about it. Called once at startup, before the first instance is
+     * launched.
+     *
+     * The pid is only acted on once /proc confirms it's still the same
+     * browser: pids get reused, and killing whatever happens to hold one now
+     * because a dead Chrome held it an hour ago would be far worse than
+     * leaving a stray process alone.
+     */
+    public static function sweepAbandoned(): int
+    {
+        $swept = 0;
+
+        foreach (glob(sys_get_temp_dir() . '/' . self::USER_DATA_DIR_PREFIX . '*') ?: [] as $directory) {
+            if (!is_dir($directory)) {
+                continue;
+            }
+
+            $pidFile = $directory . '/' . self::PID_FILE;
+            $pid = is_file($pidFile) ? (int) file_get_contents($pidFile) : 0;
+
+            if ($pid > 0 && self::isStillThisBrowser($pid, $directory)) {
+                kill_process($pid);
+                $swept++;
+            }
+
+            self::removeDirectory($directory);
+        }
+
+        return $swept;
+    }
+
+    private static function isStillThisBrowser(int $pid, string $userDataDir): bool
+    {
+        $commandLine = @file_get_contents('/proc/' . $pid . '/cmdline');
+
+        return is_string($commandLine) && str_contains($commandLine, '--user-data-dir=' . $userDataDir);
+    }
+
+    /**
+     * Reads and discards whatever Chrome has written to stdout/stderr since
+     * the last call. Chrome logs continuously (and noisily, on a page that
+     * upsets it), and a pipe nobody ever reads from stops accepting writes
+     * once it holds a bufferful - at which point Chrome's own write() blocks
+     * and the entire browser wedges, for a reason nothing else here could
+     * diagnose. bin/crawler-manager.php calls this every supervisory tick,
+     * for every generation it's still holding, so the pipes never get near
+     * that point.
+     */
+    public function drainOutput(): void
+    {
+        foreach ($this -> pipes as $pipe) {
+            if (is_resource($pipe)) {
+                stream_get_contents($pipe);
+            }
+        }
     }
 
     /**

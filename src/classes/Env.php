@@ -19,8 +19,19 @@ class Env
     {
         $path = ROOT_DIR . '/.env';
 
+        // Genuinely absent is fine - a fresh clone hasn't been through
+        // bin/install.php yet, and every key has a working default.
         if (!is_file($path)) {
             return [];
+        }
+
+        // Present but unreadable is not. .env is deliberately readable by
+        // only a couple of accounts, so this is what running as the wrong
+        // one looks like - and falling back to defaults there would silently
+        // connect to the wrong database, or treat "no login configured" as
+        // the real state of an install that has one.
+        if (!is_readable($path)) {
+            throw new \RuntimeException($path . ' exists but this user (' . current_user_name() . ') cannot read it');
         }
 
         $values = [];

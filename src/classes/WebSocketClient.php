@@ -14,6 +14,12 @@ class WebSocketClient
 {
     private const GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
 
+    // How long one frame may spend waiting for the socket's send buffer to
+    // drain before it's given up on. This is a real wait, not a formality -
+    // a Fetch.fulfillRequest command carries a whole page's base64'd HTML,
+    // far more than the kernel accepts in a single write.
+    private const WRITE_TIMEOUT_SECONDS = 10.0;
+
     /** @var resource */
     private $socket;
 
@@ -43,7 +49,7 @@ class WebSocketClient
 
         $key = base64_encode(random_bytes(16));
 
-        fwrite($this -> socket, implode("\r\n", [
+        $this -> writeAll(implode("\r\n", [
             'GET ' . $path . ' HTTP/1.1',
             'Host: ' . $parts['host'] . ':' . $parts['port'],
             'Upgrade: websocket',
@@ -115,7 +121,7 @@ class WebSocketClient
         // Fetch response's body is the whole page's base64'd HTML.
         $frame .= $payload ^ substr(str_repeat($mask, intdiv($length, 4) + 1), 0, $length);
 
-        fwrite($this -> socket, $frame);
+        $this -> writeAll($frame);
     }
 
     /**
@@ -163,7 +169,50 @@ class WebSocketClient
         $frame = chr(0x8A) . chr($length | 0x80) . $mask;
         $frame .= $payload ^ substr(str_repeat($mask, intdiv($length, 4) + 1), 0, $length);
 
-        fwrite($this -> socket, $frame);
+        $this -> writeAll($frame);
+    }
+
+    /**
+     * Writes every byte, however many fwrite() calls that takes. The socket is
+     * non-blocking, so a single fwrite() only ever writes what fits in the
+     * kernel's send buffer right now and reports how much that was - the rest
+     * is simply dropped unless it's written again once the buffer drains.
+     * Frames here routinely exceed that buffer (a fulfilled Fetch response's
+     * base64'd page HTML), and a half-written frame doesn't just lose its own
+     * tail: the peer reads the next frame's header out of the middle of it,
+     * and the connection is desynchronized from then on.
+     */
+    private function writeAll(string $payload): void
+    {
+        $deadline = microtime(true) + self::WRITE_TIMEOUT_SECONDS;
+
+        while ($payload !== '') {
+            $written = fwrite($this -> socket, $payload);
+
+            if ($written === false) {
+                return;
+            }
+
+            $payload = substr($payload, $written);
+
+            if ($payload === '') {
+                return;
+            }
+
+            $remaining = $deadline - microtime(true);
+
+            if ($remaining <= 0) {
+                return;
+            }
+
+            $read = null;
+            $write = [$this -> socket];
+            $except = null;
+
+            if (@stream_select($read, $write, $except, (int) $remaining, (int) (($remaining - (int) $remaining) * 1_000_000)) === false) {
+                return;
+            }
+        }
     }
 
     /**

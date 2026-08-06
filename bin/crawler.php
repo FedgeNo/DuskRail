@@ -38,15 +38,86 @@ function recordHostCrawl(Host $host, ?int $statusCode): void
 }
 
 /**
- * The Host for $url, with robots.txt already fetched/cached if this is the
- * first time anything from it has been seen.
+ * The Host for $url, with robots.txt read (or re-read) if what's on file is
+ * missing or stale - and, on the visits where a real robots.txt just
+ * arrived, its declared sitemaps ingested into the queue (see Sitemap).
+ * Piggybacked here because this is the one moment the Sitemap: lines are
+ * known to be fresh, and it puts sitemap ingestion on exactly the same
+ * weekly-per-host cadence as the rules themselves.
  */
 function hostFor(URL $url): Host
 {
     $host = Host::findOrCreateByName($url -> host);
-    $host -> fetchRobotsTxtIfMissing($url -> scheme);
+
+    if ($host -> fetchRobotsTxtIfStale($url -> scheme) && $host -> robotsTxt !== null && $host -> robotsTxt !== '') {
+        $queued = Sitemap::ingestFor($host, $host -> robotsTxt);
+
+        if ($queued > 0) {
+            echo 'Queued ' . $queued . ' URL(s) from ' . $url -> host . '\'s sitemap.
+';
+        }
+    }
 
     return $host;
+}
+
+/**
+ * The X-Robots-Tag header's directives, same shape as
+ * HTMLLoader::robotsDirectives() - the header form applies to any content
+ * type, which is exactly why it exists (a PDF or image has no <meta> to
+ * carry noindex in).
+ */
+function header_robots_directives(?string $header): array
+{
+    $tokens = array_map('trim', explode(',', strtolower((string) $header)));
+    $none = in_array('none', $tokens, true);
+
+    return [
+        'noindex' => $none || in_array('noindex', $tokens, true),
+        'nofollow' => $none || in_array('nofollow', $tokens, true),
+    ];
+}
+
+function pdftotext_available(): bool
+{
+    static $available = null;
+
+    return $available ??= trim((string) shell_exec('command -v pdftotext 2>/dev/null')) !== '';
+}
+
+/**
+ * The text layer of a PDF, extracted with poppler's pdftotext and whitespace-
+ * normalized. Empty string when there's nothing extractable - a scanned
+ * document, an encrypted file, something pdftotext can't parse.
+ */
+function pdf_to_text(string $pdf): string
+{
+    $path = VAR_DIR . '/pdf-extract-' . getmypid() . '.pdf';
+    file_put_contents($path, $pdf);
+
+    $text = (string) shell_exec('pdftotext -q -enc UTF-8 ' . escapeshellarg($path) . ' - 2>/dev/null');
+    unlink($path);
+
+    return HTMLLoader::normalizeWhitespace($text);
+}
+
+/**
+ * Whether $url may be fetched right now, printing why not when it may not.
+ * Three separate answers, and the difference matters to the caller: a host
+ * whose rules can't be read isn't the same as one whose rules say no, and
+ * neither is the same as a host that's simply still on cooldown.
+ */
+function crawlPermission(Host $host, URL $url): string
+{
+    if (!$host -> isRobotsTxtKnown()) {
+        return 'robots-unknown';
+    }
+
+    if ($host -> isDisallowed($url -> pathAndQuery())) {
+        return 'disallowed';
+    }
+
+    return 'allowed';
 }
 
 // An optional worker slot number (bin/crawler-manager.php passes one when
@@ -55,6 +126,15 @@ function hostFor(URL $url): Host
 // single shared file and a hang could be blamed on the wrong item entirely.
 $workerSlot = $argv[1] ?? null;
 $currentItemFile = $workerSlot !== null ? CURRENT_CRAWL_ITEM_FILE . '-' . $workerSlot : CURRENT_CRAWL_ITEM_FILE;
+
+// Cleared before anything else this run does - the file still holds whatever
+// item the slot's previous run was on, and a run that dies before picking
+// its own item (killed mid-startup, mid-queue-query, anywhere pre-pick)
+// would otherwise have that stale id read back as "the item this run hung
+// on". That exact misattribution has charged hang strikes to - and at three
+// strikes deleted - items whose only involvement was being worked on by an
+// earlier, unrelated run of the same slot.
+file_put_contents($currentItemFile, '');
 
 // bin/crawler-manager.php owns the one shared, persistent Chrome instance
 // every real fetch goes through (ChromeConnection, HeadlessBrowser) and
@@ -69,7 +149,7 @@ if ($chromeEndpoint === '') {
     exit(0);
 }
 
-$topic = is_file(CRAWL_TOPIC_FILE) ? trim(file_get_contents(CRAWL_TOPIC_FILE)) : null;
+$topic = trim((string) Setting::value(CRAWL_TOPIC_SETTING));
 $item = Item::nextToCrawl($topic !== '' ? $topic : null);
 
 if ($item === null) {
@@ -95,9 +175,20 @@ file_put_contents($currentItemFile, (string) $item -> itemId);
 
 $pageURL = new URL($item -> url);
 $host = hostFor($pageURL);
+$permission = crawlPermission($host, $pageURL);
 
-if ($host -> isDisallowed($pageURL -> path)) {
-    $item -> delete();
+if ($permission === 'robots-unknown') {
+    // The host's rules couldn't be read at all, so there's no way to know
+    // whether this is allowed. Nothing is wrong with the item - it's left
+    // exactly as it was for a later run, once robots.txt is readable again
+    // (Host::fetchRobotsTxtIfStale() retries on its own schedule).
+    echo 'Couldn\'t read robots.txt for this host, leaving item for retry.
+';
+    exit(0);
+}
+
+if ($permission === 'disallowed') {
+    $item -> delete('robots-disallowed');
     echo 'robots.txt disallows this path, deleted this item.
 ';
     exit(0);
@@ -128,11 +219,14 @@ recordHostCrawl($host, $connection -> statusCode);
 
 if ($connection -> statusCode === null) {
     // The connection itself never completed (DNS failure, connection
-    // refused, TLS handshake failure, ...) - not an HTTP-level failure at
-    // all, so there's no status code and nothing usable behind it. Same
-    // "nothing to keep" reasoning as any other unrecoverable failure.
-    $item -> delete();
-    echo 'Connection failed, deleted this item.
+    // refused, TLS handshake failure, ...). That's a fact about the *host* -
+    // the same hostname every other queued URL on it shares - not about this
+    // URL, so the item is left for retry and the host backs off on an
+    // escalating schedule instead. A host that's really gone decays to one
+    // connection attempt a week; one that was momentarily unreachable is
+    // back in rotation in minutes, with nothing deleted over the blip.
+    $host -> recordFailure();
+    echo 'Connection failed (' . $host -> consecutiveFailures . ' in a row on this host), backing the host off, item left for retry.
 ';
     exit(0);
 }
@@ -140,7 +234,7 @@ if ($connection -> statusCode === null) {
 for ($hop = 0; in_array($connection -> statusCode, REDIRECT_STATUS_CODES, true); $hop++) {
     if ($hop >= MAX_REDIRECTS) {
         $connection -> readBody();
-        $item -> delete();
+        $item -> delete('too-many-redirects');
         echo 'Too many redirects, deleted this item.
 ';
         exit(0);
@@ -150,7 +244,7 @@ for ($hop = 0; in_array($connection -> statusCode, REDIRECT_STATUS_CODES, true);
     $connection -> readBody(); // drain + close before opening the next hop's connection
 
     if ($location === null) {
-        $item -> delete();
+        $item -> delete('redirect-without-location');
         echo 'Redirect status with no Location header, deleted this item.
 ';
         exit(0);
@@ -159,7 +253,7 @@ for ($hop = 0; in_array($connection -> statusCode, REDIRECT_STATUS_CODES, true);
     $redirectTarget = $pageURL -> resolve(new URL($location));
 
     if (!$redirectTarget -> isValid()) {
-        $item -> delete();
+        $item -> delete('redirect-target-invalid');
         echo 'Redirect target isn\'t a real URL, deleted this item.
 ';
         exit(0);
@@ -167,6 +261,17 @@ for ($hop = 0; in_array($connection -> statusCode, REDIRECT_STATUS_CODES, true);
 
     $previousItemId = $item -> itemId;
     $item = $item -> redirectTo($redirectTarget);
+
+    if ($item === null) {
+        // The pre-existing row this redirect landed on was deleted by another
+        // worker while it was being read back. Nothing was lost - this item
+        // never had content of its own, only an address that turned out to
+        // belong elsewhere.
+        echo 'Redirect target disappeared while following it, nothing more to do.
+';
+        exit(0);
+    }
+
     echo 'Redirected to: ' . $item -> url . ' (itemId ' . $item -> itemId . ')
 ';
 
@@ -199,10 +304,28 @@ for ($hop = 0; in_array($connection -> statusCode, REDIRECT_STATUS_CODES, true);
 
     $pageURL = new URL($item -> url);
     $host = hostFor($pageURL);
+    $permission = crawlPermission($host, $pageURL);
 
-    if ($host -> isDisallowed($pageURL -> path)) {
-        $item -> delete();
+    if ($permission === 'robots-unknown') {
+        echo 'Couldn\'t read robots.txt for the redirect target\'s host, leaving item for retry.
+';
+        exit(0);
+    }
+
+    if ($permission === 'disallowed') {
+        $item -> delete('robots-disallowed');
         echo 'robots.txt disallows the redirect target, deleted this item.
+';
+        exit(0);
+    }
+
+    // A redirect crossing onto a different host means a request to a host
+    // this worker never reserved, and which may have been hit moments ago by
+    // someone else. Same reservation as the original fetch - lose it and the
+    // item waits rather than jumping that host's cooldown just because a
+    // redirect pointed at it.
+    if (!$host -> reserve()) {
+        echo 'The redirect target\'s host is already spoken for, leaving item for retry.
 ';
         exit(0);
     }
@@ -218,8 +341,8 @@ for ($hop = 0; in_array($connection -> statusCode, REDIRECT_STATUS_CODES, true);
     recordHostCrawl($host, $connection -> statusCode);
 
     if ($connection -> statusCode === null) {
-        $item -> delete();
-        echo 'Connection failed, deleted this item.
+        $host -> recordFailure();
+        echo 'Connection failed (' . $host -> consecutiveFailures . ' in a row on this host), backing the host off, item left for retry.
 ';
         exit(0);
     }
@@ -243,7 +366,7 @@ if ($connection -> statusCode < 200 || $connection -> statusCode >= 300) {
     // nothing to retry here (the URL is what it is), so this is exactly the
     // same call as an unrecoverable redirect: delete, don't markCrawled().
     $connection -> readBody();
-    $item -> delete();
+    $item -> delete('status-' . $connection -> statusCode);
     echo 'Status ' . $connection -> statusCode . ', deleted this item.
 ';
     exit(0);
@@ -251,18 +374,29 @@ if ($connection -> statusCode < 200 || $connection -> statusCode >= 300) {
 
 $contentType = $connection -> contentType();
 
+// X-Robots-Tag applies whatever the content type turns out to be - read once
+// here, merged with the meta-tag form later for HTML.
+$headerDirectives = header_robots_directives($connection -> headers['x-robots-tag'] ?? null);
+
 if ($contentType !== null && $contentType -> isImage()) {
     $imageData = $connection -> readBody();
-    $image = ImageLoader::load($imageData, $item -> itemId);
+
+    // SVG has no GD decoder at all, so it goes through the shared browser to
+    // be rendered into one this crawler can actually thumbnail - it's real
+    // page content (diagrams, logos, charts), not the broken-image case the
+    // rest of this branch is about.
+    $image = $contentType -> isSVG()
+        ? ImageLoader::loadSVG($imageData, $item -> itemId, $chromeEndpoint)
+        : ImageLoader::load($imageData, $item -> itemId);
 
     if ($image === null) {
-        // Content-Type claimed image/*, but ImageLoader::load() couldn't turn
-        // it into a usable thumbnail - either it wasn't decodable at all (an
-        // SVG, a corrupt file, a format GD doesn't support) or its dimensions
+        // Content-Type claimed image/*, but nothing usable came out - either
+        // it wasn't decodable at all (a corrupt file, a format GD doesn't
+        // support, an SVG the browser wouldn't render) or its dimensions
         // ruled it out (a decompression bomb, or too small to be more than a
         // tracking pixel/spacer/decorative icon). Either way there's nothing
         // to keep, same reasoning as deleting an unrecoverable redirect.
-        $item -> delete();
+        $item -> delete('image-unusable');
         echo 'Couldn\'t use image (undecodable or unusable dimensions), deleted this item.
 ';
         exit(0);
@@ -272,21 +406,69 @@ if ($contentType !== null && $contentType -> isImage()) {
     // the parent-node text captured when it was first discovered as a link)
     // rather than wiping them out - an image has no metadata of its own to
     // extract that would replace them, real or otherwise.
-    $item -> markCrawled($contentType -> type, $item -> title, $item -> description, $item -> keywords, null, null);
+    $item -> markCrawled($contentType -> type, $item -> title, $item -> description, $item -> keywords, null, null, $headerDirectives['noindex'] ? 1 : 0);
 
     echo 'Saved thumbnail, marked crawled.
 ';
     exit(0);
 }
 
+if ($contentType !== null && $contentType -> isPDF() && pdftotext_available()) {
+    $text = pdf_to_text($connection -> readBody());
+
+    if ($text === '') {
+        // Undecodable, or a scanned document with no text layer - either
+        // way there's nothing searchable in it, same call as an image that
+        // wouldn't decode.
+        $item -> delete('pdf-unusable');
+        echo 'Couldn\'t extract any text from PDF, deleted this item.
+';
+        exit(0);
+    }
+
+    // A PDF has no meta tags to mine; the discovery-time title (the anchor
+    // text that linked here) stands, and the text itself stands in for a
+    // description the way an HTML page's body text does.
+    $item -> markCrawled($contentType -> type, $item -> title, $item -> description ?? mb_substr($text, 0, 500), $item -> keywords, $text, null, $headerDirectives['noindex'] ? 1 : 0);
+    echo 'Extracted ' . mb_strlen($text) . ' characters of PDF text, marked crawled.
+';
+    exit(0);
+}
+
+if ($contentType !== null && $contentType -> isPlainText()) {
+    $text = $connection -> readBody();
+
+    if ($contentType -> charset !== null && !in_array(strtoupper($contentType -> charset), ['UTF-8', 'UTF8'], true)) {
+        $converted = @mb_convert_encoding($text, 'UTF-8', $contentType -> charset);
+
+        if ($converted !== false) {
+            $text = $converted;
+        }
+    }
+
+    $text = HTMLLoader::normalizeWhitespace($text);
+
+    if ($text === '') {
+        $item -> delete('empty-text');
+        echo 'Empty text file, deleted this item.
+';
+        exit(0);
+    }
+
+    $item -> markCrawled($contentType -> type, $item -> title, $item -> description ?? mb_substr($text, 0, 500), $item -> keywords, $text, null, $headerDirectives['noindex'] ? 1 : 0);
+    echo 'Saved ' . mb_strlen($text) . ' characters of plain text, marked crawled.
+';
+    exit(0);
+}
+
 if ($contentType === null || !$contentType -> isHTML()) {
     // Not something this crawler knows how to turn into presentable content
-    // yet (a PDF, plain text, a connection that returned no Content-Type at
+    // (a video, a zip, a PDF on a box without pdftotext, no Content-Type at
     // all, ...) - deleting rather than leaving crawledTime NULL is what
     // keeps this from being handed back by nextToCrawl() and retried forever
     // with the same non-result every single run.
     $connection -> readBody();
-    $item -> delete();
+    $item -> delete('not-html');
     echo 'Not HTML (' . ($contentType ?-> type ?? 'no response') . '), deleted this item.
 ';
     exit(0);
@@ -295,6 +477,7 @@ if ($contentType === null || !$contentType -> isHTML()) {
 $html = $connection -> readBody();
 $document = HTMLLoader::load($html, $contentType -> charset);
 $baseURL = HTMLLoader::baseURL($document, $pageURL);
+HTMLLoader::separateBlockElements($document);
 HTMLLoader::inlineImageAltText($document);
 $metadata = HTMLLoader::extractMetadata($document);
 
@@ -317,6 +500,7 @@ if (in_array($metadata['title'], JS_CHALLENGE_TITLES, true)) {
             $html = $resolvedHTML;
             $document = $resolvedDocument;
             $baseURL = HTMLLoader::baseURL($document, $pageURL);
+            HTMLLoader::separateBlockElements($document);
             HTMLLoader::inlineImageAltText($document);
             $metadata = $resolvedMetadata;
         }
@@ -331,7 +515,7 @@ if (in_array($metadata['title'], JS_CHALLENGE_TITLES, true)) {
         // challenge page's own placeholder metadata. fullHTML is still
         // saved - useful for a future retry once headless browsing works
         // for this site, or is available at all.
-        $item -> markCrawled($contentType -> type, $item -> title, $item -> description, $item -> keywords, null, $html);
+        $item -> markCrawled($contentType -> type, $item -> title, $item -> description, $item -> keywords, null, $html, $headerDirectives['noindex'] ? 1 : 0);
         echo 'JS challenge page, marked crawled (kept existing title/description).
 ';
         exit(0);
@@ -341,7 +525,70 @@ if (in_array($metadata['title'], JS_CHALLENGE_TITLES, true)) {
 ';
 }
 
+// A canonical declaration pointing somewhere else is the site saying "this
+// content's real address is over there" - the same statement a redirect
+// makes, handled the same way: merge this item into the canonical URL's row.
+// Print variants, session-id spellings, and mobile mirrors all collapse into
+// one result instead of competing with themselves in the rankings. The
+// content just fetched is stored under the canonical URL (no second fetch -
+// the site itself says they're the same document), except when the canonical
+// row was already crawled, in which case its own crawl stands and this
+// duplicate simply dissolves into it.
+$canonical = HTMLLoader::canonicalURL($document, $baseURL);
+
+if ($canonical !== null && $canonical -> toString() !== $item -> url) {
+    $previousItemId = $item -> itemId;
+    $item = $item -> redirectTo($canonical);
+
+    if ($item === null) {
+        echo 'Canonical target disappeared mid-merge, nothing more to do.
+';
+        exit(0);
+    }
+
+    echo 'Canonical URL: ' . $item -> url . ' (itemId ' . $item -> itemId . ')
+';
+
+    if ($item -> crawledTime !== null) {
+        echo 'Canonical target already crawled, merged into it.
+';
+        exit(0);
+    }
+
+    // Same claim discipline as a redirect merge: a pre-existing row at the
+    // canonical URL was never claimed by this worker, and another one could
+    // be crawling it right now.
+    if ($item -> itemId !== $previousItemId && !$item -> reclaim()) {
+        echo 'Canonical target already claimed by another worker, leaving it to them.
+';
+        exit(0);
+    }
+
+    file_put_contents($currentItemFile, (string) $item -> itemId);
+}
+
+// Page-level robots directives, from whichever channel the site used - the
+// header form (already read) or the meta tag. Either saying noindex/nofollow
+// counts; they're the same statement addressed differently.
+$metaDirectives = HTMLLoader::robotsDirectives($document);
+$noindex = $headerDirectives['noindex'] || $metaDirectives['noindex'];
+$nofollow = $headerDirectives['nofollow'] || $metaDirectives['nofollow'];
+
+if ($nofollow) {
+    // The page asked for its links not to be followed - skip discovery
+    // entirely, then index (or not, per noindex) the page itself as normal.
+    HTMLLoader::removeStyleAndScriptTags($document);
+    HTMLLoader::removeBoilerplateElements($document);
+    $bodyText = HTMLLoader::extractBodyText($document);
+
+    $item -> markCrawled($contentType -> type, $metadata['title'], $metadata['description'] ?? mb_substr($bodyText, 0, 500), $metadata['keywords'], $bodyText, $html, $noindex ? 1 : 0);
+    echo 'Marked crawled (nofollow - no link discovery' . ($noindex ? ', noindex' : '') . ').
+';
+    exit(0);
+}
+
 $images = HTMLLoader::extractImageLinks($document, $baseURL);
+$savedImages = 0;
 
 foreach ($images as $image) {
     // Only checked for same-host links - robots.txt is this site's own
@@ -349,18 +596,28 @@ foreach ($images as $image) {
     // it happens to link to, and checking every external host would mean
     // fetching robots.txt for every domain a page links to just to discover
     // its links, not just the ones actually crawled.
-    if ($image['url'] -> host === $pageURL -> host && $host -> isDisallowed($image['url'] -> path)) {
+    if ($image['url'] -> host === $pageURL -> host && $host -> isDisallowed($image['url'] -> pathAndQuery())) {
         continue;
     }
 
+    // Null when this URL shouldn't join the queue at all - already known
+    // dead, or its host has more waiting than it can work through (see
+    // Item::findOrCreateByURL()). Nothing to link to in that case.
     $imageItem = Item::findOrCreateByURL($image['url'], 'image', null, $image['description'] ?: null);
+
+    if ($imageItem === null) {
+        continue;
+    }
+
     Link::create($item -> itemId, $imageItem -> itemId, $image['description'] ?: null);
+    $savedImages++;
 }
 
-echo 'Saved ' . count($images) . ' images.
+echo 'Saved ' . $savedImages . ' of ' . count($images) . ' images.
 ';
 
 $anchorLinks = HTMLLoader::extractAnchorLinks($document, $baseURL);
+$savedLinks = 0;
 
 foreach ($anchorLinks as $link) {
     // A "sign in with..." link, not real content - and often a crawl trap,
@@ -373,7 +630,7 @@ foreach ($anchorLinks as $link) {
 
     // Same reasoning as the image loop above - only this site's own
     // robots.txt, only for this site's own paths.
-    if ($link['url'] -> host === $pageURL -> host && $host -> isDisallowed($link['url'] -> path)) {
+    if ($link['url'] -> host === $pageURL -> host && $host -> isDisallowed($link['url'] -> pathAndQuery())) {
         continue;
     }
 
@@ -381,10 +638,16 @@ foreach ($anchorLinks as $link) {
     // point at absolutely anything (another page, a PDF, an image), and
     // there's no equivalent to "found via <img>" telling us which.
     $linkedItem = Item::findOrCreateByURL($link['url'], 'unknown', null, $link['description'] ?: null);
+
+    if ($linkedItem === null) {
+        continue;
+    }
+
     Link::create($item -> itemId, $linkedItem -> itemId, $link['description'] ?: null);
+    $savedLinks++;
 }
 
-echo 'Saved ' . count($anchorLinks) . ' anchor links.
+echo 'Saved ' . $savedLinks . ' of ' . count($anchorLinks) . ' anchor links.
 ';
 
 HTMLLoader::removeStyleAndScriptTags($document);
@@ -397,7 +660,7 @@ $bodyText = HTMLLoader::extractBodyText($document);
 // FULLTEXT search relevance.
 $description = $metadata['description'] ?? mb_substr($bodyText, 0, 500);
 
-$item -> markCrawled($contentType -> type, $metadata['title'], $description, $metadata['keywords'], $bodyText, $html);
+$item -> markCrawled($contentType -> type, $metadata['title'], $description, $metadata['keywords'], $bodyText, $html, $noindex ? 1 : 0);
 
-echo 'Marked crawled.
+echo 'Marked crawled' . ($noindex ? ' (noindex - excluded from search)' : '') . '.
 ';

@@ -1,9 +1,9 @@
 /.env
 /thumbnails/*
 !/thumbnails/.gitkeep
-/crawler-current-item*
-/crawl-topic
-/chrome-devtools-endpoint
 /logs/
 /data/
 /.claude/
+/var/*
+!/var/.gitkeep
+/backups/

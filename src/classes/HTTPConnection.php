@@ -53,7 +53,24 @@ class HTTPConnection
             CURLOPT_URL => $url -> toString(),
             CURLOPT_PORT => $url -> port,
             CURLOPT_HTTPGET => true,
+            // Redirects are followed here, unlike ChromeConnection, where the
+            // crawler drives every hop itself. Nothing about robots.txt needs
+            // per-hop control, and not following was actively wrong: plenty
+            // of sites 301 /robots.txt to a canonical host, and treating that
+            // redirect as the answer recorded "couldn't read it" for a host
+            // that publishes a perfectly good one a single hop away.
+            CURLOPT_FOLLOWLOCATION => true,
+            CURLOPT_MAXREDIRS => 5,
             CURLOPT_CONNECTTIMEOUT => 10,
+            // A connect timeout alone only covers getting the connection open
+            // - a server that accepts it and then sends nothing would hold
+            // this open indefinitely, hanging the crawler worker until
+            // bin/crawler-manager.php SIGKILLs it and charges the item a hang
+            // strike for a stall that was never the item's fault. This covers
+            // the whole transfer, including the window it sits paused in
+            // between the constructor and readBody() - fine, since every
+            // caller resumes immediately.
+            CURLOPT_TIMEOUT => 15,
             CURLOPT_HTTPHEADER => self::chromeHeaders(),
             // Without this, curl sends no Accept-Encoding at all - but some
             // servers gzip the response anyway regardless (confirmed: a real
@@ -164,16 +181,28 @@ class HTTPConnection
         $trimmed = rtrim($line, "\r\n");
 
         if ($trimmed === '') {
-            // Blank line marks the end of the headers - pause here, before
-            // curl moves on to delivering body bytes to CURLOPT_WRITEFUNCTION.
+            // Blank line marks the end of a response's headers. With redirects
+            // followed, that happens once per hop - pausing on a redirect's
+            // headers would stop the transfer on the hop rather than on the
+            // response that actually answers the request, so only a final
+            // (non-redirect) response pauses here, before curl moves on to
+            // delivering body bytes to CURLOPT_WRITEFUNCTION.
+            if ($this -> statusCode !== null && $this -> statusCode >= 300 && $this -> statusCode < 400) {
+                return strlen($line);
+            }
+
             curl_pause($ch, CURLPAUSE_ALL);
             $this -> headersComplete = true;
 
             return strlen($line);
         }
 
-        if ($this -> statusCode === null && preg_match('#^HTTP/\S+\s+(\d+)#', $trimmed, $match)) {
+        // A status line starts a new response - on a followed redirect that's
+        // the next hop, whose headers replace the previous hop's rather than
+        // merging into them.
+        if (preg_match('#^HTTP/\S+\s+(\d+)#', $trimmed, $match)) {
             $this -> statusCode = (int) $match[1];
+            $this -> headers = [];
 
             return strlen($line);
         }

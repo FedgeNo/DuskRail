@@ -23,7 +23,7 @@ class HeadlessBrowser
 
     // Kept short deliberately - the total (this plus whatever the caller's
     // own per-item budget already spent) must stay comfortably under
-    // bin/crawler-manager.php's 30-second hang-kill, so a slow/stuck
+    // bin/crawler-manager.php's hang-kill timeout, so a slow/stuck
     // challenge fails this attempt on its own rather than costing the whole
     // worker a hang strike.
     private const NAVIGATION_TIMEOUT_SECONDS = 10.0;

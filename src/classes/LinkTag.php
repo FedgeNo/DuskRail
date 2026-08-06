@@ -14,6 +14,7 @@ class LinkTag extends HTMLVoidElement
     public string $tagName = 'link';
     public ?string $rel = null;
     public ?string $href = null;
+    public ?string $type = null;
 
     public function toDOM(): \DOMElement
     {
@@ -23,6 +24,10 @@ class LinkTag extends HTMLVoidElement
 
         if ($this -> href !== null) {
             $this -> attributes['href'] = $this -> href;
+        }
+
+        if ($this -> type !== null) {
+            $this -> attributes['type'] = $this -> type;
         }
 
         return parent::toDOM();

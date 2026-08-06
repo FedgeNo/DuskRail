@@ -4,15 +4,27 @@ declare(strict_types=1);
 
 require __DIR__ . '/init.php';
 
+// Issued here rather than waiting for the first search, so the browser
+// already holds its token when it starts calling api/search.php. Without
+// this, the cookie arrives on the response to the first search and every
+// reload before it lands counts as a different client.
+RateLimit::issueClientToken();
+
 $query = trim((string) ($_GET['q'] ?? ''));
+
+// Which of the two result types is selected, honoured server-side so a
+// submit without JS (or a shared/bookmarked ?result-type=image URL) comes
+// back with the radio the reader actually chose rather than silently
+// resetting to Pages.
+$resultType = ($_GET['result-type'] ?? 'html') === 'image' ? 'image' : 'html';
 
 $page = Page::create($query !== '' ? $query : 'Home');
 
 $layout = new Div();
-$layout -> class = 'layout';
+$layout -> class = 'Layout';
 
 $container = new Div();
-$container -> class = 'search-page';
+$container -> class = 'SearchPage';
 
 $form = new Form();
 $form -> id = 'search-form';
@@ -33,7 +45,7 @@ $queryInput -> id = 'query-input';
 $queryInput -> type = 'text';
 $queryInput -> name = 'q';
 $queryInput -> value = $query;
-$queryInput -> placeholder = 'Search DuskRail...';
+$queryInput -> placeholder = 'Search DuskRail…';
 $queryInput -> class = 'form-control';
 $searchRow -> addContent($queryInput);
 
@@ -50,7 +62,7 @@ $form -> addContent($searchRow);
 // of what). Giving a radio group that shared label is exactly what a
 // fieldset + legend is for.
 $fieldset = new Fieldset();
-$fieldset -> class = 'result-type mt-2';
+$fieldset -> class = 'ResultType mt-2';
 $fieldset -> addContent(new Legend('Result type'));
 
 $typeChoice = new Div();
@@ -63,7 +75,7 @@ $htmlRadio -> id = 'type-html';
 $htmlRadio -> type = 'radio';
 $htmlRadio -> name = 'result-type';
 $htmlRadio -> value = 'html';
-$htmlRadio -> checked = true;
+$htmlRadio -> checked = $resultType === 'html';
 $htmlRadio -> class = 'form-check-input';
 $htmlOption -> addContent($htmlRadio);
 $htmlLabel = new Label();
@@ -80,6 +92,7 @@ $imageRadio -> id = 'type-image';
 $imageRadio -> type = 'radio';
 $imageRadio -> name = 'result-type';
 $imageRadio -> value = 'image';
+$imageRadio -> checked = $resultType === 'image';
 $imageRadio -> class = 'form-check-input';
 $imageOption -> addContent($imageRadio);
 $imageLabel = new Label();
@@ -95,9 +108,25 @@ $form -> addContent($fieldset);
 
 $container -> addContent($form);
 
+// Always rendered, shown only when no search is in play - once a query is
+// live, the result count in #status is the number that matters, and
+// search.js flips this back on when the query is cleared rather than the
+// page needing a reload to say what's searchable.
+$indexStats = new IndexStats();
+$indexStats -> id = 'index-stats';
+
+if ($query !== '') {
+    $indexStats -> attributes['hidden'] = 'hidden';
+}
+
+$container -> addContent($indexStats);
+
 $status = new Div();
 $status -> id = 'status';
 $status -> class = 'mt-3';
+// Announced to screen readers when it changes - the result count and error
+// messages land here, and nothing else on the page says them out loud.
+$status -> attributes['aria-live'] = 'polite';
 $container -> addContent($status);
 
 $results = new Div();
@@ -106,14 +135,11 @@ $container -> addContent($results);
 
 $layout -> addContent($container);
 
-// Populated by search.js when an image result is clicked - placeholder text
-// server-rendered here rather than left truly empty, since
-// HTMLObject::fillEmptyNonVoidTags() would inject an empty text node into a
-// genuinely-empty div anyway (defeating a CSS :empty-based placeholder).
+// Populated by search.js: the placeholder prompt once there are image
+// results to preview, then the selected image's own preview content.
 $preview = new Div();
 $preview -> id = 'preview';
-$preview -> class = 'preview-column';
-$preview -> addContent('Select an image to preview it here.');
+$preview -> class = 'PreviewColumn';
 $layout -> addContent($preview);
 
 $page -> addContent($layout);

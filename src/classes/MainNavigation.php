@@ -22,6 +22,24 @@ class MainNavigation extends HTMLObject
         $container -> class = 'NavContainer';
         $container -> addContent($brand);
 
+        // Searching is public; running the crawl isn't. So a signed-in
+        // operator gets the crawl controls and a way out, and everyone else
+        // gets the way in - without which the login page would be reachable
+        // only by knowing to type its URL, now that no page redirects there.
+        if (Auth::isAuthenticated()) {
+            $watch = new Anchor(ServerURL::absolute('/watch.php'), 'Watch');
+            $watch -> class = 'NavLink';
+            $container -> addContent($watch);
+
+            $signOut = new Anchor(ServerURL::absolute('/logout.php'), 'Sign Out');
+            $signOut -> class = 'NavLink';
+            $container -> addContent($signOut);
+        } else {
+            $signIn = new Anchor(ServerURL::absolute('/login.php'), 'Sign In');
+            $signIn -> class = 'NavLink';
+            $container -> addContent($signIn);
+        }
+
         $this -> addContent($container);
 
         return parent::toDOM();

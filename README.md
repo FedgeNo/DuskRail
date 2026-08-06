@@ -11,10 +11,12 @@ and a small AJAX front end to search it.
   from the links and images on each page and feeding them back into the queue,
   fetching through a real, shared headless Chrome instance so requests are
   genuinely indistinguishable from an ordinary browser's.
-- **Indexes** each page's title, description, keywords, and full body text,
-  plus a thumbnail for every image it finds.
-- **Searches** that index with FULLTEXT ranking, over both HTML pages and
-  images, through a web UI with infinite scroll and an image preview panel.
+- **Indexes** each page's title, description, keywords, and full body text —
+  HTML, PDFs, and plain text alike — plus a thumbnail for every image it
+  finds.
+- **Searches** that index with FULLTEXT ranking, over both pages and images,
+  through a web UI with match snippets, infinite scroll, and an image preview
+  panel.
 
 ## Features
 
@@ -45,14 +47,43 @@ and a small AJAX front end to search it.
   same one. The shared browser is health-checked continuously and rotated
   roughly hourly — a rotation drains rather than kills, only tearing down the
   outgoing instance once every worker still using it has finished.
-- **Politeness** — per-host request cooldowns (longer after a `429`/`503`), so a
-  single host is never hammered.
-- **robots.txt** — fetched and cached per host, enforced before every fetch,
-  every redirect hop, and every same-host link discovered on a page. Follows
-  Google's documented algorithm rather than a plain prefix match: `Allow`/
-  `Disallow` patterns (`*` wildcards, trailing `$` end-anchors) scoped to the
-  `User-agent: *` group, the longest matching pattern wins, ties go to
-  `Allow`.
+- **Politeness** — per-host request cooldowns (longer after a `429`/`503`).
+  A host's turn is reserved atomically as its item is claimed, so concurrent
+  workers can't each pick a different item on the same host and fire at it
+  together.
+- **robots.txt** — fetched and cached per host (re-read weekly), enforced
+  before every fetch, every redirect hop, and every same-host link discovered
+  on a page, against the path *and* query string. Follows Google's documented
+  algorithm rather than a plain prefix match: `Allow`/`Disallow` patterns
+  (`*` wildcards, trailing `$` end-anchors) scoped to the `User-agent: *`
+  group, the longest matching pattern wins, ties go to `Allow`; only the
+  first 500 KiB is read, as Google's own parser does. `Crawl-delay` is
+  honored (capped at an hour). A robots.txt that can't be read is never
+  treated as permission — "no response", a `403` or a `5xx` records the
+  host's rules as *unknown* (as distinct from a `404`, which really does
+  mean no rules), and its items are left untouched for a later retry rather
+  than crawled.
+- **Page-level opt-outs** — `<meta name="robots">` and `X-Robots-Tag` are
+  honored: `noindex` pages are crawled but never returned by search,
+  `nofollow` pages contribute no links, and individually
+  `rel="nofollow"`/`ugc`/`sponsored` links are skipped.
+- **Sitemaps** — `Sitemap:` lines in robots.txt are ingested (bounded, one
+  index level deep) on the same weekly cadence as the rules themselves, so
+  pages nothing links to yet still get found.
+- **Canonical URLs** — `<link rel="canonical">` pointing elsewhere merges the
+  page into its canonical row, link edges included, so print/session/mobile
+  variants collapse into one result instead of competing with themselves.
+- **Queue shape** — recrawl is adaptive: content is hashed on every crawl,
+  unchanged pages double their wait (a week up to two months), changed ones
+  reset to a week. A URL the crawler resolved as unusable is remembered so
+  rediscovering it doesn't restart the fetch-and-delete cycle; one host can
+  only have so many URLs waiting at once, so a single large site can't swamp
+  the frontier; and a host that stops answering backs off on an escalating
+  schedule (minutes up to a week) with nothing deleted over an outage.
+- **Beyond HTML** — PDFs have their text extracted and indexed (via
+  `pdftotext`, when installed) and plain-text files are indexed directly;
+  page charsets are taken from the BOM, the header, or a sniffed
+  `<meta charset>`, in that order, so legacy pages don't index as mojibake.
 - **SSRF hardening** — a URL is only crawlable if its host has a real,
   currently-delegated TLD (list fetched from IANA and refreshed weekly). This
   alone rejects IP literals, `localhost`, and internal-only suffixes like
@@ -64,33 +95,76 @@ and a small AJAX front end to search it.
   resolves relative links per RFC 3986.
 - **Content extraction** — title/description/keywords from classic meta tags,
   Open Graph, Twitter Cards, and JSON-LD; boilerplate (nav/header/footer/ads)
-  stripped before body text is captured; image `alt` text folded in.
+  stripped before body text is captured; the whitespace that rendering would
+  imply is injected at block boundaries first, so minified markup doesn't
+  extract as glued-together words; image `alt` text folded in.
 - **Image handling** — decodes and thumbnails images, rejecting tracking
-  pixels, tiny icons, and decompression bombs.
-- **Self-healing queue** — pages that reliably hang or fail are retried a
-  bounded number of times, then dropped; nothing that couldn't be turned into
-  presentable content is ever left in the index.
+  pixels, tiny icons, and decompression bombs. SVG, which no image decoder
+  reads, is rendered by the shared browser and thumbnailed from that — as a
+  picture, never as a document, so nothing in it executes.
+- **Self-healing queue** — a page that fails outright is dropped and
+  remembered; one that hangs the crawler is retried a bounded number of times
+  first. Nothing that couldn't be turned into presentable content is ever
+  left in the index.
 
 ### Search
 
-- **FULLTEXT ranking** — `MATCH … AGAINST`, ranked first by how many other
-  pages link to a result using matching anchor text (an external relevance
-  signal), then by direct content relevance.
-- **Pages and images** — toggle between HTML results and an image grid.
+- **FULLTEXT ranking** — `MATCH … AGAINST`, ranked first by how many distinct
+  *hosts* link to a result using matching anchor text (an external relevance
+  signal that ten links from one site can't inflate), then by direct content
+  relevance, then by how often the URL is linked at all.
+- **Snippets** — each result shows the text around where the query actually
+  matched, with the terms highlighted, rather than the first lines of a
+  description that may not contain the match at all.
+- **Phrases** — a quoted query (`"particle physics"`) matches as an exact
+  phrase.
+- **Pages and images** — toggle between page results (HTML, PDF, plain text)
+  and an image grid.
 - **Infinite scroll** — results paginate in as you scroll; the justified image
-  grid lays out each page independently.
+  grid lays out each page independently and re-flows on resize.
 - **Image preview** — clicking an image opens a Google-Images-style side panel:
   thumbnail first, then the full-resolution image swapped in once it loads,
   with the full description and a link to the page it was found on.
+- **Public** — searching needs no account. Running the crawl does: the live
+  feed, the focus topic and deleting items sit behind a single operator
+  password (`bin/install.php` sets it; only its hash is stored), and the
+  endpoints that change something take a CSRF token as well as the session.
+- **Rate limited** — the public endpoints carry two per-minute budgets, by IP
+  and by client cookie. The IP budget is the real limit; the cookie one is
+  much tighter and catches a single client that has gone wrong (a retry loop,
+  a page reloading itself) without throttling everyone else behind the same
+  address. Over budget answers `429` with `Retry-After`, and the search page
+  says how long the wait is rather than reporting a generic failure.
 
 ### Operations
 
-- **`watch.php`** — a live feed of what's being crawled, with a control to focus
-  the crawl on a topic (ranking not-yet-crawled URLs by how on-topic the pages
-  linking to them are).
+- **Two service accounts** — the crawler runs as its own system user, not as
+  the web server's. Nothing in the checkout is writable by either; the only
+  writable paths are the thumbnails the web server serves, the TLD cache, and
+  the crawler's own run state. Nothing crosses between the two through the
+  filesystem — they share a database, which is where the focused-crawl topic
+  lives, so the web server needs no write access anywhere inside the project.
+- **Hardened serving** — the site is HTTPS-only (plain HTTP just redirects,
+  with HSTS), every page carries a Content Security Policy that only allows
+  this origin's own scripts and styles (possible because Bootstrap is served
+  locally, not from a CDN), internals (`var/`, `bin/`, `src/`, `.env`) are
+  denied at the web server, and the sign-in form is throttled per IP before
+  any password is ever checked.
+- **`watch.php`** — a live feed of what's being crawled, whether the crawler
+  is running and its last hour's throughput, a control to focus the crawl on
+  a topic (ranking not-yet-crawled URLs by how on-topic the pages linking to
+  them are), and a box to seed new URLs into the queue.
+- **`bin/backup.php`** — dumps the database and archives the thumbnails,
+  timestamped, keeping the last seven runs.
+- **`bin/test.php`** — a dependency-free test suite over the pure logic (URL
+  parsing/resolution, robots.txt matching, HTML extraction, text handling).
 - **`bin/install.php`** — an idempotent installer that checks requirements,
-  writes `.env`, provisions the database and schema, and prints the manual
-  (root-only) steps for the Apache vhost and the crawler systemd service.
+  writes `.env` (including hashing the login password), provisions the
+  database and schema, and prints the manual (root-only) steps for the Apache
+  vhost and the crawler systemd service.
+- **`bin/normalize-urls.php`** — re-normalizes stored URLs against the current
+  canonicalization rules and merges the rows that turn out to be the same
+  resource. Reports and changes nothing without `--apply`.
 
 ## Tech stack
 
@@ -102,19 +176,23 @@ and a small AJAX front end to search it.
   DevTools Protocol (a hand-rolled WebSocket client, not a package) for every
   real page/image fetch and for resolving JS bot challenges.
 - **ext-gd** for image decoding/thumbnailing, **ext-curl** for the small set of
-  fetches that aren't real crawler traffic (robots.txt, the IANA TLD list),
-  **ext-mbstring**, **ext-dom** for HTML parsing.
-- **Bootstrap** (CDN) for basic UI styling; vanilla JS for the front end.
+  fetches that aren't real crawler traffic (robots.txt, sitemaps, the IANA
+  TLD list), **ext-mbstring**, **ext-dom** for HTML parsing.
+- **Bootstrap** (vendored locally as `bootstrap.min.css` — no CDN at runtime)
+  for basic UI styling; vanilla JS for the front end.
 
 ## Requirements
 
 - PHP 8.1+ with the `mysqli`, `gd`, `mbstring`, `curl`, and `dom` extensions
+  (`ext-posix` is optional — shell fallbacks cover machines without it)
 - MariaDB or MySQL
 - A Chrome or Chromium binary on `$PATH` (`chromium-browser`, `google-chrome`,
   `chromium`, or `google-chrome-stable` are auto-detected; set `CHROME_BINARY`
   in `.env` if it's installed under another name). The crawler doesn't
   function without one — `bin/install.php` warns if it can't find one.
 - A web server (Apache is what the installer documents) for the search UI
+- Optional: `pdftotext` (poppler-utils) — without it, PDFs are skipped
+  instead of indexed
 
 ## Setup
 
@@ -130,9 +208,15 @@ answers when run interactively), creates the database and schema, warms the
 TLD list, and prints the remaining manual steps that need root — the Apache
 vhost and the optional `duskrail-crawler` systemd service.
 
+Run it interactively at least once: it asks for the operator password that the
+crawl controls sit behind and stores only its hash. Searching works without it;
+until it's set, nobody can sign in to run the crawl — that's deliberate, since
+the alternative for an install that skipped it would be letting everybody in.
+
 Configuration lives in `.env` (gitignored); see `.env.example` for the keys —
-notably `CHROME_BINARY`, which only needs setting if none of the auto-detected
-binary names match what's installed.
+notably `WORKER_COUNT`, and `CHROME_BINARY`, which only needs setting if none
+of the auto-detected binary names match what's installed. A `WORKER_COUNT`
+change takes effect the next time the crawler manager starts.
 
 ## Usage
 
@@ -147,14 +231,27 @@ fetching through their own tab in that shared browser), and prints their
 per-slot output. Ctrl+C shuts it down gracefully: no new workers get spawned,
 in-flight ones are left to finish their current item on their own, and only
 then does it shut down the Chrome instance — nothing gets killed mid-crawl.
-`WORKER_COUNT` (top of the file) trades off crawl throughput against how many
-concurrent tabs — and the memory/CPU each one costs — the machine can
-actually sustain. On a configured box it can instead run as the
-`duskrail-crawler` systemd service.
 
-Then open the site (the Apache vhost the installer sets up, e.g.
-`http://duskrail.local/`) to search, or `http://duskrail.local/watch.php` to
-watch the crawl live and set a focus topic.
+In normal operation it runs as a systemd service under its own account
+instead, with the same graceful shutdown:
+
+```sh
+sudo systemctl start duskrail-crawler
+sudo systemctl stop duskrail-crawler     # workers finish their current item
+sudo journalctl -u duskrail-crawler -f
+```
+
+`WORKER_COUNT` (in `.env`) trades off crawl throughput against how many
+concurrent tabs — and the memory/CPU each one costs — the machine can
+actually sustain.
+
+Then open the site — `https://duskrail.localhost/` by default — to search, or
+sign in and open `https://duskrail.localhost/watch.php` to watch the crawl
+live, focus it on a topic, and seed new URLs. A name under `.localhost`
+resolves to your own machine in every modern browser with no `/etc/hosts`
+entry; if you set `SITE_URL` to some other hostname, the installer prints the
+hosts line it needs. Run `php bin/test.php` after touching the parsing or
+matching logic, and `php bin/backup.php` whenever the index is worth keeping.
 
 ## Project layout
 
@@ -163,14 +260,22 @@ init.php                bootstrap: constants, autoloader, helpers
 src/classes/            all classes (autoloaded by name)
 src/functions.php       shared helpers
 src/config.php          app config, read from .env via Env
-api/                    JSON endpoints: search, item, recent-items, …
+api/                    JSON endpoints: search, item, recent-items,
+                        crawler-status, set-topic, add-seed, delete-item
 index.php               search UI
-watch.php / watch.js    live crawl feed + topic control
+login.php / logout.php  operator sign-in
+watch.php / watch.js    live crawl feed, topic control, URL seeding
 search.js / style.css   front-end behavior and styling
 bin/install.php         installer / requirements checker
 bin/crawler.php         crawls one item, then exits
 bin/crawler-manager.php supervisor: owns the shared Chrome instance, runs
                         WORKER_COUNT concurrent workers
+bin/normalize-urls.php  re-normalizes and de-duplicates stored URLs
+bin/reextract-text.php  re-runs text extraction over stored page HTML
+bin/backup.php          timestamped DB dump + thumbnail archive, rotated
+bin/test.php            test runner over tests/
+tests/                  dependency-free tests for the pure logic
+var/                    the running crawler's state files (gitignored)
 schema.sql              full-schema snapshot (installer applies deltas)
 ```
 

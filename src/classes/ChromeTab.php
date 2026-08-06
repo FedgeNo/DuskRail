@@ -24,7 +24,6 @@ class ChromeTab
     private const HTTP_TIMEOUT_SECONDS = 3;
     private const CONTEXT_TIMEOUT_SECONDS = 3.0;
 
-    private string $hostAndPort;
     private WebSocketClient $browserWs;
     private int $nextBrowserCommandId = 1;
     private string $browserContextId;
@@ -33,8 +32,6 @@ class ChromeTab
 
     public function __construct(string $hostAndPort, float $handshakeTimeoutSeconds)
     {
-        $this -> hostAndPort = $hostAndPort;
-
         $browserWsURL = self::browserWebSocketURL($hostAndPort);
 
         if ($browserWsURL === null) {
@@ -42,11 +39,26 @@ class ChromeTab
         }
 
         $this -> browserWs = new WebSocketClient($browserWsURL, $handshakeTimeoutSeconds);
-        $this -> browserContextId = $this -> createBrowserContext();
 
-        $targetId = $this -> createTarget($this -> browserContextId);
-        $pageWsURL = 'ws://' . $hostAndPort . '/devtools/page/' . $targetId;
-        $this -> ws = new WebSocketClient($pageWsURL, $handshakeTimeoutSeconds);
+        try {
+            $this -> browserContextId = $this -> createBrowserContext();
+
+            $targetId = $this -> createTarget($this -> browserContextId);
+            $pageWsURL = 'ws://' . $hostAndPort . '/devtools/page/' . $targetId;
+            $this -> ws = new WebSocketClient($pageWsURL, $handshakeTimeoutSeconds);
+        } catch (\Throwable $exception) {
+            // Whatever already exists inside the shared browser has to be torn
+            // down right here: a caller that never received a usable tab has
+            // no close() to call, so an orphaned context would sit there for
+            // the rest of that browser's hour-long life.
+            if (isset($this -> browserContextId)) {
+                $this -> disposeBrowserContext();
+            }
+
+            $this -> browserWs -> close();
+
+            throw $exception;
+        }
     }
 
     /**

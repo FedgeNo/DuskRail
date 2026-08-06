@@ -9,7 +9,9 @@ class Input extends HTMLVoidElement
     public ?string $name = null;
     public ?string $value = null;
     public ?string $placeholder = null;
+    public ?string $autocomplete = null;
     public bool $checked = false;
+    public bool $autofocus = false;
 
     public function toDOM(): \DOMElement
     {
@@ -19,6 +21,14 @@ class Input extends HTMLVoidElement
 
         if ($this -> checked) {
             $this -> attributes['checked'] = 'checked';
+        }
+
+        if ($this -> autofocus) {
+            $this -> attributes['autofocus'] = 'autofocus';
+        }
+
+        if ($this -> autocomplete !== null) {
+            $this -> attributes['autocomplete'] = $this -> autocomplete;
         }
 
         if ($this -> name !== null) {

@@ -22,12 +22,18 @@ class TLDs
 {
     private const SOURCE_URL = 'https://data.iana.org/TLD/tlds-alpha-by-domain.txt';
     private const CACHE_FILE = ROOT_DIR . '/data/tlds.txt';
+    private const LOCK_FILE = ROOT_DIR . '/data/tlds.lock';
 
     // IANA updates the real list only occasionally (a handful of times a
     // year, almost always additions) - refetching weekly is comfortably more
     // often than it actually changes, while keeping even a long-running
     // crawler process from ever running on a badly stale copy.
     private const MAX_AGE_SECONDS = 7 * 24 * 60 * 60;
+
+    // How long a failed refresh waits before anything tries again. Without
+    // it, a cache that's aged out while IANA is unreachable means every
+    // crawler worker, every run, spends its time on the same failing fetch.
+    private const RETRY_SECONDS = 60 * 60;
 
     private static ?array $tlds = null;
 
@@ -69,25 +75,63 @@ class TLDs
             return;
         }
 
-        $connection = new HTTPConnection(new URL(self::SOURCE_URL));
-
-        if ($connection -> statusCode === null || $connection -> statusCode < 200 || $connection -> statusCode >= 300) {
-            // Fetch failed (network hiccup, IANA temporarily unreachable) -
-            // leave whatever cache already exists in place (however stale)
-            // rather than clearing it. readCache() falling back to an empty
-            // set would fail every single URL closed instead of just running
-            // on a slightly-older-than-a-week list a little longer.
-            return;
-        }
-
-        $body = $connection -> readBody();
         $directory = dirname(self::CACHE_FILE);
 
         if (!is_dir($directory)) {
             mkdir($directory, 0755, true);
         }
 
-        file_put_contents(self::CACHE_FILE, $body);
+        // Several crawler workers run at once and each hits this the moment
+        // the cache ages out, so without a lock they'd all fetch the same
+        // list from IANA simultaneously and then write over each other. The
+        // one that takes the lock does the work; the rest carry on with the
+        // cache they already have, which is at most a few minutes older than
+        // what's arriving.
+        $lock = fopen(self::LOCK_FILE, 'c');
+
+        if ($lock === false) {
+            return;
+        }
+
+        if (!flock($lock, LOCK_EX | LOCK_NB)) {
+            fclose($lock);
+
+            return;
+        }
+
+        try {
+            $connection = new HTTPConnection(new URL(self::SOURCE_URL));
+
+            if ($connection -> statusCode === null || $connection -> statusCode < 200 || $connection -> statusCode >= 300) {
+                // Fetch failed (network hiccup, IANA temporarily unreachable) -
+                // leave whatever cache already exists in place (however stale)
+                // rather than clearing it. readCache() falling back to an empty
+                // set would fail every single URL closed instead of just running
+                // on a slightly-older-than-a-week list a little longer.
+                //
+                // The existing file's mtime is pushed forward by RETRY_SECONDS'
+                // worth of shortfall all the same, so the next process along
+                // doesn't immediately try again and spend its own budget on the
+                // same unreachable host.
+                if (is_file(self::CACHE_FILE)) {
+                    touch(self::CACHE_FILE, time() - self::MAX_AGE_SECONDS + self::RETRY_SECONDS);
+                }
+
+                return;
+            }
+
+            // Written beside the real file and moved into place, so a reader
+            // in another process never sees a half-written list - rename() is
+            // atomic within a filesystem, file_put_contents() is not.
+            $temporary = self::CACHE_FILE . '.' . getmypid();
+
+            if (file_put_contents($temporary, $connection -> readBody()) !== false) {
+                rename($temporary, self::CACHE_FILE);
+            }
+        } finally {
+            flock($lock, LOCK_UN);
+            fclose($lock);
+        }
     }
 
     private static function readCache(): array

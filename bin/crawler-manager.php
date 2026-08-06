@@ -39,10 +39,25 @@ require __DIR__ . '/../init.php';
 
 // Each concurrent worker opens its own tab in the one shared Chrome instance
 // - see this file's own docblock on why this isn't "however many CPU cores".
-const WORKER_COUNT = 3;
-const TIMEOUT_SECONDS = 30.0;
+// From .env rather than a constant here, because bin/install.php needs the
+// same number to set up one writable crawler-current-item-N per slot.
+define('WORKER_COUNT', (require ROOT_DIR . '/src/config.php')['workerCount']);
+
+// The hang-kill line. This is a backstop for a genuinely stuck process, not
+// a budget a working run should ever brush against - a legitimate run can
+// spend up to 15 seconds per redirect hop on a slow host, refresh a
+// robots.txt, ingest a sitemap, and walk a few hundred discovered links, and
+// at 30 seconds real runs on slow hosts were being SIGKILLed mid-crawl (and
+// their items charged hang strikes) for the crime of taking 40.
+const TIMEOUT_SECONDS = 120.0;
 const POLL_INTERVAL_SECONDS = 0.1;
 const MAX_HANGS_PER_ITEM = 3;
+
+// How many items may be tracked for hangs at once before the ones sitting on
+// a single, isolated strike are dropped. Generous - this exists to bound a
+// map that would otherwise grow for the process's whole lifetime, not to
+// stop any item that's genuinely repeating from reaching MAX_HANGS_PER_ITEM.
+const MAX_TRACKED_HANG_COUNTS = 1000;
 
 // "Every hour or so" - long enough to amortize Chrome's ~1-2 second startup
 // cost across many crawled items, short enough that a slow memory leak or
@@ -54,6 +69,11 @@ const MAX_CHROME_AGE_SECONDS = 3600.0;
 // (binary missing, launch erroring) would have every single idle tick retry
 // it back-to-back as fast as the loop spins, rather than backing off.
 const CHROME_RETRY_COOLDOWN_SECONDS = 5.0;
+
+// How often the heartbeat Setting is refreshed. Comfortably under the
+// staleness threshold the watch page uses, comfortably over the loop's own
+// tick so this isn't a database write 10 times a second.
+const HEARTBEAT_INTERVAL_SECONDS = 5.0;
 
 // SIGINT (Ctrl+C) or SIGTERM (a plain `kill`) means "stop when convenient",
 // not "stop now" - crawler.php itself ignores both, so the only thing that
@@ -76,20 +96,10 @@ if (function_exists('pcntl_async_signals')) {
 
 function delete_item_by_id(int $itemId): void
 {
-    $connection = Database::connection();
-
-    $select = mysqli_prepare($connection, '
-SELECT *
-    FROM `Items`
-    WHERE `itemId` = ?
-');
-    mysqli_stmt_bind_param($select, 'i', $itemId);
-    mysqli_stmt_execute($select);
-    $row = mysqli_fetch_assoc(mysqli_stmt_get_result($select));
-
-    if ($row !== null) {
-        Item::fromRow($row) -> delete();
-    }
+    // Recorded as dead, not just removed: a URL that hangs a worker three
+    // times running will do it again the moment anything links to it, and
+    // that's three more 30-second stalls each time it's rediscovered.
+    Item::findById($itemId) ?-> delete('repeatedly-hung');
 }
 
 /**
@@ -98,6 +108,21 @@ SELECT *
  * started - a missing binary or a launch failure, never something worth
  * retrying immediately (see CHROME_RETRY_COOLDOWN_SECONDS at the call site).
  */
+/**
+ * Blanks the published endpoint - emptied, never deleted. An empty file
+ * already means "no Chrome available" to bin/crawler.php, and the file
+ * carries permissions it can't recreate for itself: this manager runs as
+ * apache, which has no write access to the project directory, so
+ * bin/install.php creates the file and grants apache write on that one path.
+ * Deleting it would take the ACL and SELinux label with it and leave the next
+ * run unable to publish an endpoint at all - silently, since there'd be
+ * nothing to write to and no way to say so.
+ */
+function clear_chrome_endpoint(): void
+{
+    file_put_contents(CHROME_DEVTOOLS_ENDPOINT_FILE, '');
+}
+
 function launch_chrome(): ?ChromeProcess
 {
     try {
@@ -105,7 +130,7 @@ function launch_chrome(): ?ChromeProcess
     } catch (\Throwable $exception) {
         fwrite(STDERR, 'Failed to launch Chrome: ' . $exception -> getMessage() . '
 ');
-        @unlink(CHROME_DEVTOOLS_ENDPOINT_FILE);
+        clear_chrome_endpoint();
 
         return null;
     }
@@ -121,13 +146,14 @@ function launch_chrome(): ?ChromeProcess
  * Ensures $chromeInstances[$currentGeneration] is healthy and hasn't aged
  * out, rotating in a fresh generation (launched and published BEFORE the
  * outgoing one is even considered for teardown, so there's never a moment
- * where the endpoint file points at nothing usable) if not. The outgoing
- * generation is left in $chromeInstances with whatever refCount it already
- * has - see release_chrome_reference(), which is what actually shuts it down
- * once every worker still tagged with it has finished - never torn down
- * here even if that count happens to be 0 already (that just means nothing
- * was using it at this exact instant, not that nothing ever will again
- * before the next check). Returns false (leaving $lastAttemptAt untouched)
+ * where the endpoint file points at nothing usable) if not. An outgoing
+ * generation that still has workers on it stays in $chromeInstances to
+ * drain - see release_chrome_reference(), which shuts it down once the last
+ * of them finishes. One at refCount 0 has already drained rather than being
+ * momentarily idle: every worker dispatched from here on is tagged with the
+ * new generation instead, so nothing can pick the outgoing one back up and
+ * no later release would ever arrive to shut it down - that case is torn
+ * down here and now. Returns false (leaving $lastAttemptAt untouched)
  * if a real replacement attempt is due but still within its retry cooldown,
  * or if the attempt itself just failed - true otherwise, including when the
  * existing generation was already fine as-is.
@@ -157,8 +183,14 @@ function ensure_current_chrome_generation(array &$chromeInstances, int &$current
 ';
     }
 
+    $outgoingGeneration = $currentGeneration;
     $currentGeneration++;
     $chromeInstances[$currentGeneration] = ['process' => $replacement, 'refCount' => 0];
+
+    if (isset($chromeInstances[$outgoingGeneration]) && $chromeInstances[$outgoingGeneration]['refCount'] <= 0) {
+        $chromeInstances[$outgoingGeneration]['process'] -> shutdown();
+        unset($chromeInstances[$outgoingGeneration]);
+    }
 
     return true;
 }
@@ -191,8 +223,12 @@ function release_chrome_reference(array &$chromeInstances, int $generation, int 
 function start_worker(int $slot): array
 {
     $pipes = [];
+    // PHP_BINARY, not "php" - whichever interpreter is running this manager
+    // is the one whose extensions and version were checked at install time,
+    // and it isn't necessarily the first "php" on $PATH (a systemd unit's
+    // PATH in particular is nothing like a login shell's).
     $process = proc_open(
-        'php ' . escapeshellarg(ROOT_DIR . '/bin/crawler.php') . ' ' . escapeshellarg((string) $slot),
+        escapeshellarg(PHP_BINARY) . ' ' . escapeshellarg(ROOT_DIR . '/bin/crawler.php') . ' ' . escapeshellarg((string) $slot),
         [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']],
         $pipes
     );
@@ -256,6 +292,13 @@ $chromeGeneration = 0;
 $chromeInstances = [];
 $lastChromeAttemptAt = 0.0;
 
+$sweptBrowsers = ChromeProcess::sweepAbandoned();
+
+if ($sweptBrowsers > 0) {
+    echo 'Cleaned up ' . $sweptBrowsers . ' Chrome instance(s) left behind by a previous run.
+';
+}
+
 if (!ensure_current_chrome_generation($chromeInstances, $chromeGeneration, $lastChromeAttemptAt)) {
     fwrite(STDERR, 'Couldn\'t launch Chrome, exiting.
 ');
@@ -263,12 +306,25 @@ if (!ensure_current_chrome_generation($chromeInstances, $chromeGeneration, $last
 }
 
 $announcedShutdown = false;
+$lastHeartbeatAt = 0.0;
 
 while (true) {
+    if (microtime(true) - $lastHeartbeatAt >= HEARTBEAT_INTERVAL_SECONDS) {
+        $lastHeartbeatAt = microtime(true);
+        Setting::store(CRAWLER_HEARTBEAT_SETTING, (string) time());
+    }
+
     if ($shuttingDown && !$announcedShutdown) {
         $announcedShutdown = true;
         echo 'Shutdown requested - letting in-flight workers finish, not spawning new ones.
 ';
+    }
+
+    // Every generation still being held, not just the current one - a
+    // draining instance keeps logging right up until its last worker lets go
+    // of it (see ChromeProcess::drainOutput() on what a full pipe does to it).
+    foreach ($chromeInstances as $instance) {
+        $instance['process'] -> drainOutput();
     }
 
     foreach ($workers as $slot => $worker) {
@@ -298,7 +354,7 @@ while (true) {
             $instance['process'] -> shutdown();
         }
 
-        @unlink(CHROME_DEVTOOLS_ENDPOINT_FILE);
+        clear_chrome_endpoint();
         exit(0);
     }
 
@@ -310,9 +366,14 @@ while (true) {
         emit_lines($slot, $worker['outBuffer'], stream_get_contents($worker['pipes'][1]), STDOUT);
         emit_lines($slot, $worker['errBuffer'], stream_get_contents($worker['pipes'][2]), STDERR);
 
-        $timedOut = microtime(true) - $worker['startedAt'] >= TIMEOUT_SECONDS;
+        // "Hung" means still running past the deadline, not merely "took
+        // longer than the deadline" - a worker that finished on its own,
+        // however slowly, did its job and must not be charged a hang strike
+        // (three of which delete the item it just successfully crawled).
+        $running = proc_get_status($worker['process'])['running'];
+        $timedOut = $running && microtime(true) - $worker['startedAt'] >= TIMEOUT_SECONDS;
 
-        if (!$timedOut && proc_get_status($worker['process'])['running']) {
+        if ($running && !$timedOut) {
             continue;
         }
 
@@ -321,13 +382,27 @@ while (true) {
             // read may never even notice a SIGTERM.
             proc_terminate($worker['process'], 9);
 
+            // An empty slot file means the run died before picking anything
+            // (bin/crawler.php clears it at startup) - there is no item to
+            // blame, and counting strikes against the 0 an empty string
+            // casts to would be blaming a phantom.
             $currentItemFile = CURRENT_CRAWL_ITEM_FILE . '-' . $slot;
-            $stuckItemId = is_file($currentItemFile) ? (int) file_get_contents($currentItemFile) : null;
+            $stuckItemId = is_file($currentItemFile) ? (int) file_get_contents($currentItemFile) : 0;
 
-            if ($stuckItemId === null) {
+            if ($stuckItemId <= 0) {
                 fwrite(STDERR, '[' . $slot . '] Crawler process hung (couldn\'t tell which item), killed.
 ');
             } else {
+                // Only items currently accumulating strikes are worth
+                // remembering. Without this the map grows by one entry per
+                // distinct item that ever hung, for however many months this
+                // process runs - and every one of them past the first few is
+                // an item that hung once, long ago, and will never be seen
+                // again.
+                if (count($hangCounts) >= MAX_TRACKED_HANG_COUNTS) {
+                    $hangCounts = array_filter($hangCounts, static fn (int $count): bool => $count > 1);
+                }
+
                 $hangCounts[$stuckItemId] = ($hangCounts[$stuckItemId] ?? 0) + 1;
                 fwrite(STDERR, '[' . $slot . '] Crawler process hung on itemId ' . $stuckItemId . ' (' . $hangCounts[$stuckItemId] . '/' . MAX_HANGS_PER_ITEM . '), killed.' . '
 ');
