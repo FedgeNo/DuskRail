@@ -7,10 +7,10 @@ and a small AJAX front end to search it.
 
 ## What it does
 
-- **Crawls** pages starting from whatever's in the index, discovering new URLs
-  from the links and images on each page and feeding them back into the queue,
-  fetching through a real, shared headless Chrome instance so requests are
-  genuinely indistinguishable from an ordinary browser's.
+- **Crawls** pages starting from URLs you seed, discovering more through the
+  links and images on each page and the sites' own sitemaps, fetching through
+  a real, shared headless Chrome instance so requests are genuinely
+  indistinguishable from an ordinary browser's.
 - **Indexes** each page's title, description, keywords, and full body text —
   HTML, PDFs, and plain text alike — plus a thumbnail for every image it
   finds.
@@ -30,9 +30,9 @@ and a small AJAX front end to search it.
   `Sec-Fetch-*` and client hints) are Chrome's own, with `Referer` set from a
   real parent page looked up in the link graph rather than guessed. Chrome's
   own "headless" identity is overridden with a plausible desktop one. Only
-  robots.txt fetches and the internal IANA TLD-list refresh use a plain
-  (still Chrome-shaped) HTTP client, since neither is traffic against a
-  crawled site.
+  robots.txt and sitemap fetches and the internal IANA TLD-list refresh use a
+  plain (still Chrome-shaped) HTTP client, since none of those is a crawl of
+  a site's content.
 - **JS bot-challenge resolution** — a Cloudflare-style "Just a moment..."
   interstitial is handed to that same shared browser, which runs its
   JavaScript for real (its own verification fetch, redirect, reload) and
@@ -112,7 +112,10 @@ and a small AJAX front end to search it.
 - **FULLTEXT ranking** — `MATCH … AGAINST`, ranked first by how many distinct
   *hosts* link to a result using matching anchor text (an external relevance
   signal that ten links from one site can't inflate), then by direct content
-  relevance, then by how often the URL is linked at all.
+  relevance, then by how often the URL is linked at all. Retrieval is
+  two-stage — link ranking runs over a bounded pool of the top matches by
+  content relevance — so a broad query costs the same at millions of indexed
+  pages as at thousands.
 - **Snippets** — each result shows the text around where the query actually
   matched, with the terms highlighted, rather than the first lines of a
   description that may not contain the match at all.
@@ -165,13 +168,19 @@ and a small AJAX front end to search it.
 - **`bin/normalize-urls.php`** — re-normalizes stored URLs against the current
   canonicalization rules and merges the rows that turn out to be the same
   resource. Reports and changes nothing without `--apply`.
+- **`bin/reextract-text.php`** — re-runs the current text-extraction pipeline
+  over every page's stored HTML, so extraction improvements reach the whole
+  index immediately instead of waiting a recrawl cycle. Reports and changes
+  nothing without `--apply`.
 
 ## Tech stack
 
 - **PHP 8.1+** — almost the entire project. A custom autoloader maps flat class
   names to `src/classes/ClassName.php`; no Composer/PSR-4.
 - **MariaDB / MySQL** — accessed via `mysqli` with prepared statements
-  throughout; FULLTEXT indexes for search.
+  throughout; FULLTEXT indexes for search. Every hot query is index-driven
+  and designed for a multi-million-row index — nothing scans or sorts a whole
+  table per request.
 - **A real headless Chrome/Chromium instance** — driven directly over its
   DevTools Protocol (a hand-rolled WebSocket client, not a package) for every
   real page/image fetch and for resolving JS bot challenges.
