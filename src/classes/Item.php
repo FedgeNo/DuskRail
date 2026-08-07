@@ -39,6 +39,10 @@ class Item
     private const RECRAWL_BASE_SECONDS = 7 * 24 * 60 * 60;
     private const RECRAWL_MAX_SECONDS = 8 * 7 * 24 * 60 * 60;
 
+    // Rows per batched statement, so one page's discoveries can't build a
+    // statement with thousands of parameters.
+    private const BATCH_CHUNK_SIZE = 200;
+
     public ?int $itemId = null;
     public ?string $url = null;
     public ?int $hostId = null;
@@ -402,6 +406,115 @@ INSERT INTO `Items` (`url`, `hostId`, `type`, `title`, `description`)
         $item -> description = $description;
 
         return $item;
+    }
+
+    /**
+     * The batched form of findOrCreateByURL(), for a whole page's discovered
+     * links at once - returns url => Item for everything that entered the
+     * queue, omitting whatever was skipped (already dead, or its host at
+     * capacity), exactly as the single-URL form returns null for those.
+     *
+     * Same outcome as calling findOrCreateByURL() per link, in a handful of
+     * statements instead of five per link. A page linking a few hundred URLs
+     * was spending seconds of round trips here - more than parsing the page
+     * and, on a fast host, more than fetching it.
+     *
+     * $discoveries is url => ['url' => URL, 'type' => string,
+     * 'description' => ?string, 'count' => int], where count is how many
+     * times the page referred to that URL, so `inc` lands where per-link
+     * calls would have left it.
+     *
+     * @return array<string, self>
+     */
+    public static function findOrCreateManyByURL(array $discoveries): array
+    {
+        if ($discoveries === []) {
+            return [];
+        }
+
+        $connection = Database::connection();
+        $dead = DeadURL::deadAmong(array_keys($discoveries));
+
+        $hostCounts = [];
+
+        foreach ($discoveries as $urlString => $discovery) {
+            if (isset($dead[$urlString])) {
+                continue;
+            }
+
+            $hostName = $discovery['url'] -> host;
+            $hostCounts[$hostName] = ($hostCounts[$hostName] ?? 0) + $discovery['count'];
+        }
+
+        $hosts = Host::findOrCreateManyByName($hostCounts);
+        $pending = [];
+
+        foreach ($discoveries as $urlString => $discovery) {
+            if (isset($dead[$urlString])) {
+                continue;
+            }
+
+            $host = $hosts[$discovery['url'] -> host] ?? null;
+
+            if ($host === null || !$host -> hasPendingCapacity()) {
+                continue;
+            }
+
+            $host -> countNewPendingItem();
+            $pending[$urlString] = ['discovery' => $discovery, 'host' => $host];
+        }
+
+        if ($pending === []) {
+            return [];
+        }
+
+        foreach (array_chunk($pending, self::BATCH_CHUNK_SIZE, true) as $chunk) {
+            $rows = implode(', ', array_fill(0, count($chunk), '(?, ?, ?, ?, ?, ?)'));
+            $arguments = [];
+            $types = '';
+
+            foreach ($chunk as $urlString => $entry) {
+                $arguments[] = $urlString;
+                $arguments[] = $entry['host'] -> hostId;
+                $arguments[] = self::truncate($entry['discovery']['type'], self::MAX_TYPE_LENGTH);
+                $arguments[] = self::truncate($entry['discovery']['title'] ?? null, self::MAX_TITLE_LENGTH);
+                $arguments[] = self::truncate($entry['discovery']['description'], self::MAX_DESCRIPTION_LENGTH);
+                $arguments[] = $entry['discovery']['count'];
+                $types .= 'sisssi';
+            }
+
+            $insert = mysqli_prepare($connection, '
+INSERT INTO `Items` (`url`, `hostId`, `type`, `title`, `description`, `inc`)
+    VALUES ' . $rows . '
+    ON DUPLICATE KEY UPDATE
+        `inc` = `inc` + VALUES(`inc`),
+        `title` = COALESCE(`title`, VALUES(`title`)),
+        `description` = COALESCE(`description`, VALUES(`description`))
+');
+            mysqli_stmt_bind_param($insert, $types, ...$arguments);
+            mysqli_stmt_execute($insert);
+        }
+
+        $items = [];
+
+        foreach (array_chunk(array_keys($pending), self::BATCH_CHUNK_SIZE) as $chunk) {
+            $placeholders = implode(', ', array_fill(0, count($chunk), '?'));
+
+            $select = mysqli_prepare($connection, '
+SELECT *
+    FROM `Items`
+    WHERE `url` IN (' . $placeholders . ')
+');
+            mysqli_stmt_bind_param($select, str_repeat('s', count($chunk)), ...$chunk);
+            mysqli_stmt_execute($select);
+            $result = mysqli_stmt_get_result($select);
+
+            while ($row = mysqli_fetch_assoc($result)) {
+                $items[$row['url']] = self::fromRow($row);
+            }
+        }
+
+        return $items;
     }
 
     /**

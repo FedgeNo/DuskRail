@@ -36,6 +36,27 @@ class HeadlessBrowser
 
     private const EVALUATE_TIMEOUT_SECONDS = 3.0;
 
+    /**
+     * Hosts whose requests are refused while a challenge page runs. This is
+     * the only place blocking can do anything: ChromeConnection fails the
+     * document request outright, so an ordinary crawl never parses a page and
+     * never asks for a subresource. Here the page really does load, and
+     * everything it pulls in competes for the same connection the crawl needs
+     * - while none of it helps a challenge script prove we're a browser.
+     *
+     * Matched as domain suffixes, so a subdomain is covered by its parent.
+     */
+    private const BLOCKED_HOST_SUFFIXES = [
+        'doubleclick.net', 'googlesyndication.com', 'googleadservices.com',
+        'google-analytics.com', 'googletagmanager.com', 'googletagservices.com',
+        'adservice.google.com', 'adnxs.com', 'rubiconproject.com', 'pubmatic.com',
+        'criteo.com', 'criteo.net', 'taboola.com', 'outbrain.com', 'openx.net',
+        'scorecardresearch.com', 'quantserve.com', 'moatads.com', 'amazon-adsystem.com',
+        'facebook.net', 'connect.facebook.net', 'hotjar.com', 'mixpanel.com',
+        'segment.io', 'segment.com', 'newrelic.com', 'nr-data.net', 'branch.io',
+        'chartbeat.com', 'parsely.com', 'sharethis.com', 'addthis.com', 'zdassets.com',
+    ];
+
     // Same fake identity ChromeConnection presents - real Chrome's own UA
     // says "HeadlessChrome" outright, which would be visible to (and could
     // itself trip) the very challenge script this is trying to get past.
@@ -168,9 +189,37 @@ class HeadlessBrowser
             return;
         }
 
+        if (self::isBlocked((string) ($params['request']['url'] ?? ''))) {
+            $tab -> sendCommand('Fetch.failRequest', ['requestId' => $requestId, 'errorReason' => 'BlockedByClient']);
+
+            return;
+        }
+
         // Everything else (the challenge's own scripts, its verification
         // fetch, images, iframes, ...) proceeds over the real network
         // unchanged - only the top-level document is ever swapped out here.
         $tab -> sendCommand('Fetch.continueRequest', ['requestId' => $requestId]);
+    }
+
+    /**
+     * Whether $url belongs to an ad or analytics host (see
+     * BLOCKED_HOST_SUFFIXES). Suffix matching is anchored on a dot boundary
+     * so "evilgoogletagmanager.com" isn't caught by "googletagmanager.com".
+     */
+    private static function isBlocked(string $url): bool
+    {
+        $host = strtolower((string) parse_url($url, PHP_URL_HOST));
+
+        if ($host === '') {
+            return false;
+        }
+
+        foreach (self::BLOCKED_HOST_SUFFIXES as $suffix) {
+            if ($host === $suffix || str_ends_with($host, '.' . $suffix)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 }

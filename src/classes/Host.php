@@ -63,6 +63,10 @@ class Host
     // linked them.
     private const MAX_PENDING_ITEMS = 500;
 
+    // Rows per batched statement, so one page's discoveries can't build a
+    // statement with thousands of parameters.
+    private const BATCH_CHUNK_SIZE = 200;
+
     // Pending counts are read once per host per process and then tracked
     // locally. Re-counting per discovered link would mean a COUNT(*) per
     // link on a page that can carry hundreds, to enforce a limit that only
@@ -132,6 +136,69 @@ SELECT *
         mysqli_stmt_execute($select);
 
         return self::fromRow(mysqli_fetch_assoc(mysqli_stmt_get_result($select)));
+    }
+
+    /**
+     * Finds or creates every named host at once, as name => Host. $counts
+     * maps hostname to how many times a page referred to it, so `inc` ends
+     * up exactly where per-link calls would have left it - one statement
+     * bumping by N rather than N statements bumping by one.
+     *
+     * @param array<string, int> $counts
+     * @return array<string, self>
+     */
+    public static function findOrCreateManyByName(array $counts): array
+    {
+        if ($counts === []) {
+            return [];
+        }
+
+        $connection = Database::connection();
+        $names = array_keys($counts);
+
+        foreach (array_chunk($names, self::BATCH_CHUNK_SIZE) as $chunk) {
+            // VALUES() feeds each row's own increment into the duplicate
+            // branch, so one statement can bump different hosts by different
+            // amounts.
+            $rows = implode(', ', array_fill(0, count($chunk), '(?, ?)'));
+            $arguments = [];
+            $types = '';
+
+            foreach ($chunk as $name) {
+                $arguments[] = $name;
+                $arguments[] = $counts[$name];
+                $types .= 'si';
+            }
+
+            $insert = mysqli_prepare($connection, '
+INSERT INTO `Hosts` (`host`, `inc`)
+    VALUES ' . $rows . '
+    ON DUPLICATE KEY UPDATE `inc` = `inc` + VALUES(`inc`)
+');
+            mysqli_stmt_bind_param($insert, $types, ...$arguments);
+            mysqli_stmt_execute($insert);
+        }
+
+        $hosts = [];
+
+        foreach (array_chunk($names, self::BATCH_CHUNK_SIZE) as $chunk) {
+            $placeholders = implode(', ', array_fill(0, count($chunk), '?'));
+
+            $select = mysqli_prepare($connection, '
+SELECT *
+    FROM `Hosts`
+    WHERE `host` IN (' . $placeholders . ')
+');
+            mysqli_stmt_bind_param($select, str_repeat('s', count($chunk)), ...$chunk);
+            mysqli_stmt_execute($select);
+            $result = mysqli_stmt_get_result($select);
+
+            while ($row = mysqli_fetch_assoc($result)) {
+                $hosts[$row['host']] = self::fromRow($row);
+            }
+        }
+
+        return $hosts;
     }
 
     /**

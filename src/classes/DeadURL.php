@@ -29,6 +29,10 @@ class DeadURL
 
     private const MAX_AGE_SECONDS = 90 * 24 * 60 * 60;
 
+    // Placeholders per batched statement. Bounded so one page's discoveries
+    // can't build a statement with thousands of parameters.
+    private const LOOKUP_CHUNK_SIZE = 200;
+
     /**
      * Records $url as dead. INSERT ... ON DUPLICATE KEY UPDATE rather than
      * INSERT IGNORE: a URL that dies again after being let back in should
@@ -86,6 +90,62 @@ DELETE FROM `DeadURLs`
         mysqli_stmt_execute($delete);
 
         return false;
+    }
+
+    /**
+     * Which of $urls are currently known-dead, as a url => true map. One
+     * query for a whole page's discoveries instead of one per link: a page
+     * links hundreds of URLs, and asking about each separately was the single
+     * largest non-network cost of crawling one page.
+     *
+     * Entries past MAX_AGE_SECONDS don't count and are deleted here, the same
+     * as isDead() does for a single lookup - otherwise batching would mean
+     * nothing ever prunes the table.
+     */
+    public static function deadAmong(array $urls): array
+    {
+        if ($urls === []) {
+            return [];
+        }
+
+        $connection = Database::connection();
+        $dead = [];
+        $expired = [];
+        $cutoff = time() - self::MAX_AGE_SECONDS;
+
+        foreach (array_chunk(array_unique($urls), self::LOOKUP_CHUNK_SIZE) as $chunk) {
+            $placeholders = implode(', ', array_fill(0, count($chunk), '?'));
+
+            $select = mysqli_prepare($connection, '
+SELECT `deadURLId`, `url`, `deadTime`
+    FROM `DeadURLs`
+    WHERE `url` IN (' . $placeholders . ')
+');
+            mysqli_stmt_bind_param($select, str_repeat('s', count($chunk)), ...$chunk);
+            mysqli_stmt_execute($select);
+            $result = mysqli_stmt_get_result($select);
+
+            while ($row = mysqli_fetch_assoc($result)) {
+                if ((int) $row['deadTime'] >= $cutoff) {
+                    $dead[$row['url']] = true;
+                } else {
+                    $expired[] = (int) $row['deadURLId'];
+                }
+            }
+        }
+
+        foreach (array_chunk($expired, self::LOOKUP_CHUNK_SIZE) as $chunk) {
+            $placeholders = implode(', ', array_fill(0, count($chunk), '?'));
+
+            $delete = mysqli_prepare($connection, '
+DELETE FROM `DeadURLs`
+    WHERE `deadURLId` IN (' . $placeholders . ')
+');
+            mysqli_stmt_bind_param($delete, str_repeat('i', count($chunk)), ...$chunk);
+            mysqli_stmt_execute($delete);
+        }
+
+        return $dead;
     }
 
     /**

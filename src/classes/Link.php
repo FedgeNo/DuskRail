@@ -12,6 +12,10 @@ class Link
     // chose, and mb_substr is what keeps it from landing mid-character.
     private const MAX_DESCRIPTION_LENGTH = 255;
 
+    // Rows per batched statement, so one page's links can't build a
+    // statement with thousands of parameters.
+    private const BATCH_CHUNK_SIZE = 200;
+
     /**
      * Records that $parentId links to $childId, described by $description
      * (e.g. the image's parent-node text). INSERT IGNORE because the same
@@ -39,6 +43,42 @@ INSERT IGNORE INTO `Links` (`parentId`, `childId`, `description`)
 ');
         mysqli_stmt_bind_param($insert, 'iis', $parentId, $childId, $description);
         mysqli_stmt_execute($insert);
+    }
+
+    /**
+     * Records a whole page's links at once - $links is childId => description.
+     * Same INSERT IGNORE semantics as create(), including dropping a page's
+     * link to itself, in one statement per chunk instead of one per link.
+     */
+    public static function createMany(int $parentId, array $links): void
+    {
+        unset($links[$parentId]);
+
+        if ($links === []) {
+            return;
+        }
+
+        $connection = Database::connection();
+
+        foreach (array_chunk($links, self::BATCH_CHUNK_SIZE, true) as $chunk) {
+            $rows = implode(', ', array_fill(0, count($chunk), '(?, ?, ?)'));
+            $arguments = [];
+            $types = '';
+
+            foreach ($chunk as $childId => $description) {
+                $arguments[] = $parentId;
+                $arguments[] = $childId;
+                $arguments[] = $description !== null ? mb_substr($description, 0, self::MAX_DESCRIPTION_LENGTH) : null;
+                $types .= 'iis';
+            }
+
+            $insert = mysqli_prepare($connection, '
+INSERT IGNORE INTO `Links` (`parentId`, `childId`, `description`)
+    VALUES ' . $rows . '
+');
+            mysqli_stmt_bind_param($insert, $types, ...$arguments);
+            mysqli_stmt_execute($insert);
+        }
     }
 
     /**

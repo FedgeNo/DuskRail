@@ -14,7 +14,49 @@ declare(strict_types=1);
  */
 class ChromeProcess
 {
-    private const CANDIDATE_BINARIES = ['chromium-browser', 'google-chrome', 'chromium', 'google-chrome-stable'];
+    // Chromium first, Chrome only as a fallback: Chromium is the same engine
+    // without the proprietary additions, and every one of those additions is
+    // something this crawler would want switched off anyway.
+    private const CANDIDATE_BINARIES = ['chromium-browser', 'chromium', 'google-chrome', 'google-chrome-stable'];
+
+    /**
+     * Launch flags, beyond the profile directory and debugging port.
+     *
+     * The browser is a fetching engine here, never a user's browser: it shows
+     * nobody a page, keeps nothing between runs, and shares a slow connection
+     * with the crawl itself. Everything Chrome does on its own behalf -
+     * component updates, Safe Browsing list downloads, field-trial configs,
+     * sync, crash uploads, pings - is bandwidth taken from crawling and is
+     * switched off. --incognito on top of the throwaway profile means nothing
+     * is written to disk to be wiped in the first place.
+     */
+    private const LAUNCH_FLAGS = [
+        '--headless=new',
+        '--incognito',
+        '--disable-gpu',
+        '--no-first-run',
+        '--no-default-browser-check',
+        '--disable-extensions',
+        '--disable-default-apps',
+        '--disable-component-update',
+        '--disable-background-networking',
+        '--disable-client-side-phishing-detection',
+        '--disable-domain-reliability',
+        '--disable-sync',
+        '--metrics-recording-only',
+        '--no-pings',
+        '--disable-breakpad',
+        // Renderers for tabs nobody is looking at are throttled by default -
+        // which is every tab here, and the throttling shows up as fetches
+        // that inexplicably take seconds longer than the network needed.
+        '--disable-background-timer-throttling',
+        '--disable-backgrounding-occluded-windows',
+        '--disable-renderer-backgrounding',
+        // /dev/shm is small on many systems and Chrome falls over when it
+        // fills; this trades a little speed for not dying.
+        '--disable-dev-shm-usage',
+        '--mute-audio',
+    ];
 
     // Chrome's cold start is normally a second or two, but a machine that's
     // already busy crawling - or one that just tore down the outgoing
@@ -53,14 +95,15 @@ class ChromeProcess
         mkdir($this -> userDataDir, 0700, true);
 
         $descriptors = [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']];
-        $process = proc_open([
-            $binary,
-            '--headless=new',
-            '--disable-gpu',
-            '--remote-debugging-port=0',
-            '--user-data-dir=' . $this -> userDataDir,
-            'about:blank',
-        ], $descriptors, $pipes);
+        $process = proc_open(array_merge(
+            [$binary],
+            self::LAUNCH_FLAGS,
+            [
+                '--remote-debugging-port=0',
+                '--user-data-dir=' . $this -> userDataDir,
+                'about:blank',
+            ]
+        ), $descriptors, $pipes);
 
         if (!is_resource($process)) {
             throw new \RuntimeException('Couldn\'t start ' . $binary);

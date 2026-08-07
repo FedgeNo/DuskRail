@@ -588,7 +588,15 @@ if ($nofollow) {
 }
 
 $images = HTMLLoader::extractImageLinks($document, $baseURL);
-$savedImages = 0;
+$anchorLinks = HTMLLoader::extractAnchorLinks($document, $baseURL);
+
+// Everything the page points at, gathered before anything is written. A page
+// links hundreds of URLs and the per-link round trips to record them cost
+// more than parsing the page - collecting first means one batch of
+// statements instead of five per link (see Item::findOrCreateManyByURL()).
+// Keyed by normalized URL, so a page referring to the same target twice is
+// one queue entry carrying a count of two, which is what `inc` counts.
+$discoveries = [];
 
 foreach ($images as $image) {
     // Only checked for same-host links - robots.txt is this site's own
@@ -600,24 +608,20 @@ foreach ($images as $image) {
         continue;
     }
 
-    // Null when this URL shouldn't join the queue at all - already known
-    // dead, or its host has more waiting than it can work through (see
-    // Item::findOrCreateByURL()). Nothing to link to in that case.
-    $imageItem = Item::findOrCreateByURL($image['url'], 'image', null, $image['description'] ?: null);
+    $urlString = $image['url'] -> toString();
 
-    if ($imageItem === null) {
+    if (isset($discoveries[$urlString])) {
+        $discoveries[$urlString]['count']++;
         continue;
     }
 
-    Link::create($item -> itemId, $imageItem -> itemId, $image['description'] ?: null);
-    $savedImages++;
+    $discoveries[$urlString] = [
+        'url' => $image['url'],
+        'type' => 'image',
+        'description' => $image['description'] ?: null,
+        'count' => 1,
+    ];
 }
-
-echo 'Saved ' . $savedImages . ' of ' . count($images) . ' images.
-';
-
-$anchorLinks = HTMLLoader::extractAnchorLinks($document, $baseURL);
-$savedLinks = 0;
 
 foreach ($anchorLinks as $link) {
     // A "sign in with..." link, not real content - and often a crawl trap,
@@ -634,20 +638,36 @@ foreach ($anchorLinks as $link) {
         continue;
     }
 
-    // "unknown" rather than a guess like images get "image" - a href can
-    // point at absolutely anything (another page, a PDF, an image), and
-    // there's no equivalent to "found via <img>" telling us which.
-    $linkedItem = Item::findOrCreateByURL($link['url'], 'unknown', null, $link['description'] ?: null);
+    $urlString = $link['url'] -> toString();
 
-    if ($linkedItem === null) {
+    if (isset($discoveries[$urlString])) {
+        $discoveries[$urlString]['count']++;
         continue;
     }
 
-    Link::create($item -> itemId, $linkedItem -> itemId, $link['description'] ?: null);
-    $savedLinks++;
+    // "unknown" rather than a guess like images get "image" - a href can
+    // point at absolutely anything (another page, a PDF, an image), and
+    // there's no equivalent to "found via <img>" telling us which.
+    $discoveries[$urlString] = [
+        'url' => $link['url'],
+        'type' => 'unknown',
+        'description' => $link['description'] ?: null,
+        'count' => 1,
+    ];
 }
 
-echo 'Saved ' . $savedLinks . ' of ' . count($anchorLinks) . ' anchor links.
+// Whatever comes back entered the queue; the rest was already dead or on a
+// host with more waiting than it can work through.
+$discovered = Item::findOrCreateManyByURL($discoveries);
+$links = [];
+
+foreach ($discovered as $urlString => $discoveredItem) {
+    $links[$discoveredItem -> itemId] = $discoveries[$urlString]['description'];
+}
+
+Link::createMany($item -> itemId, $links);
+
+echo 'Saved ' . count($discovered) . ' of ' . count($discoveries) . ' discovered URLs (' . count($images) . ' images, ' . count($anchorLinks) . ' links on the page).
 ';
 
 HTMLLoader::removeStyleAndScriptTags($document);
