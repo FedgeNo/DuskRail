@@ -43,6 +43,13 @@ assert_same('relative path merges', 'https://example.com/dir/sub/page', $base ->
 assert_same('dot-dot climbs', 'https://example.com/a/b', $base -> resolve(new URL('../a/b')) -> toString());
 assert_same('query-only keeps path', 'https://example.com/dir/page.html?only=q', $base -> resolve(new URL('?only=q')) -> toString());
 
+// An absurdly long URL still parses and normalizes - the crawler truncates
+// it to the column width when storing, which is only safe if toString()
+// itself never fails on one.
+$absurd = 'https://example.com/' . str_repeat('a', 2000);
+assert_same('over-length URL survives normalization', 'https://example.com/' . str_repeat('a', 2000), (new URL($absurd)) -> toString());
+assert_true('over-length URL is still valid', (new URL($absurd)) -> isValid());
+
 // pathAndQuery - what robots.txt rules match against.
 assert_same('pathAndQuery includes the query', '/search?q=x', (new URL('https://example.com/search?q=x')) -> pathAndQuery());
 assert_same('pathAndQuery bare path', '/search', (new URL('https://example.com/search')) -> pathAndQuery());

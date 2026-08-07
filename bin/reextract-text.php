@@ -55,7 +55,7 @@ $unchanged = 0;
 $unreadable = 0;
 
 foreach ($ids as $itemId) {
-    $item = Item::findById($itemId);
+    $item = Item::findWithContentById($itemId);
 
     if ($item === null) {
         continue;

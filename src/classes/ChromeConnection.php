@@ -12,13 +12,13 @@ declare(strict_types=1);
  * Deliberately does NOT let Chrome auto-follow a redirect or render the page
  * - bin/crawler.php's own per-hop loop (robots.txt check, politeness
  * recording) stays fully in control, constructing one of these per hop:
- * Fetch domain is paused at both the Request and Response stage, scoped to
- * resourceType "Document" only. The Request-stage pause is let through
- * unconditionally (bin/crawler.php already decided this URL is worth
- * fetching before constructing this class); the Response-stage pause is
- * where the real status/headers are read - a 2xx has its body pulled via
- * Fetch.getResponseBody, anything else (a redirect, an error status) is
- * failed immediately since nothing downstream needs an error page's body.
+ * Fetch domain is paused at the Response stage only, scoped to resourceType
+ * "Document". That's where the real status/headers are - a 2xx has its body
+ * pulled via Fetch.getResponseBody, anything else (a redirect, an error
+ * status) is failed immediately since nothing downstream needs an error
+ * page's body. Nothing is intercepted at the Request stage: whether this URL
+ * is worth fetching was settled before this class was constructed, so
+ * pausing there only added a round trip to reach the same outcome.
  * Either way the request is always ultimately failed rather than continued,
  * so Chrome never proceeds to parse/render the document or fetch anything
  * it references - confirmed empirically that this alone is enough to
@@ -109,8 +109,12 @@ class ChromeConnection
                 'bitness' => '64',
             ],
         ]);
+        // Only the Response stage is intercepted. The Request stage was
+        // paused solely to let it straight through again, which cost a
+        // pause, a round trip and a resume on every single fetch to reach
+        // the same place - bin/crawler.php has already decided this exact
+        // URL is worth fetching before this class is constructed.
         $tab -> sendCommand('Fetch.enable', ['patterns' => [
-            ['urlPattern' => '*', 'requestStage' => 'Request', 'resourceType' => 'Document'],
             ['urlPattern' => '*', 'requestStage' => 'Response', 'resourceType' => 'Document'],
         ]]);
 
@@ -150,15 +154,6 @@ class ChromeConnection
 
     private function handleRequestPaused(ChromeTab $tab, array $params, ?int &$bodyRequestId, ?string &$pendingRequestId): bool
     {
-        if (!isset($params['responseStatusCode'])) {
-            // Request stage - bin/crawler.php already decided this exact URL
-            // is worth fetching (robots.txt, politeness) before constructing
-            // this class, so there's nothing left to check here.
-            $tab -> sendCommand('Fetch.continueRequest', ['requestId' => $params['requestId']]);
-
-            return false;
-        }
-
         $this -> statusCode = $params['responseStatusCode'];
 
         foreach ($params['responseHeaders'] as $header) {

@@ -180,8 +180,20 @@ class ChromeTab
         }
     }
 
+    /**
+     * The browser-level DevTools URL, discovered once per process. It's a
+     * property of the running browser, not of a tab, and never changes while
+     * that browser lives - so paying an HTTP round trip for it on every
+     * single tab was one avoidable request per fetch.
+     */
     private static function browserWebSocketURL(string $hostAndPort): ?string
     {
+        static $cache = [];
+
+        if (isset($cache[$hostAndPort])) {
+            return $cache[$hostAndPort];
+        }
+
         $ch = curl_init('http://' . $hostAndPort . '/json/version');
         curl_setopt_array($ch, [
             CURLOPT_RETURNTRANSFER => true,
@@ -192,7 +204,12 @@ class ChromeTab
         curl_close($ch);
 
         $decoded = is_string($response) ? json_decode($response, true) : null;
+        $url = $decoded['webSocketDebuggerUrl'] ?? null;
 
-        return $decoded['webSocketDebuggerUrl'] ?? null;
+        if ($url !== null) {
+            $cache[$hostAndPort] = $url;
+        }
+
+        return $url;
     }
 }

@@ -62,6 +62,12 @@ class Item
     public ?int $claimedUntil = null;
     public ?int $inc = null;
 
+    /**
+     * fullText/fullHTML are only present when the row was read by something
+     * that actually wants them (see findById() vs findWithContentById()), so
+     * they're read leniently rather than assumed - every other column is
+     * always selected.
+     */
     public static function fromRow(array $row): self
     {
         $item = new self();
@@ -73,8 +79,8 @@ class Item
         $item -> title = $row['title'];
         $item -> description = $row['description'];
         $item -> keywords = $row['keywords'];
-        $item -> fullText = $row['fullText'];
-        $item -> fullHTML = $row['fullHTML'];
+        $item -> fullText = $row['fullText'] ?? null;
+        $item -> fullHTML = $row['fullHTML'] ?? null;
         $item -> crawledTime = $row['crawledTime'] !== null ? (int) $row['crawledTime'] : null;
         $item -> noindex = (int) $row['noindex'];
         $item -> contentHash = $row['contentHash'];
@@ -280,8 +286,35 @@ SELECT `Items`.`itemId`, `Items`.`hostId`
      * that already have an id in hand rather than one of the queue's own
      * picks (bin/crawler-manager.php identifying the item a killed worker was
      * stuck on, api/delete-item.php).
+     *
+     * Everything except fullText and fullHTML. Those two are the entire page,
+     * routinely megabytes, and no caller of this reads them: the crawler
+     * loads the item it is about to overwrite, and the manager loads one it
+     * is about to delete. Dragging them across the wire per pick was pure
+     * cost. findWithContentById() is the one for a caller that wants them.
      */
     public static function findById(int $itemId): ?self
+    {
+        $select = mysqli_prepare(Database::connection(), '
+SELECT `itemId`, `url`, `hostId`, `type`, `title`, `description`, `keywords`,
+        `crawledTime`, `noindex`, `contentHash`, `recrawlAfterSeconds`, `recrawlDueTime`,
+        `claimedUntil`, `inc`
+    FROM `Items`
+    WHERE `itemId` = ?
+    LIMIT 1
+');
+        mysqli_stmt_bind_param($select, 'i', $itemId);
+        mysqli_stmt_execute($select);
+        $row = mysqli_fetch_assoc(mysqli_stmt_get_result($select));
+
+        return $row !== null ? self::fromRow($row) : null;
+    }
+
+    /**
+     * findById() plus the stored page content, for the one caller that
+     * genuinely re-reads it (bin/reextract-text.php).
+     */
+    public static function findWithContentById(int $itemId): ?self
     {
         $select = mysqli_prepare(Database::connection(), '
 SELECT *
@@ -433,35 +466,53 @@ INSERT INTO `Items` (`url`, `hostId`, `type`, `title`, `description`)
         }
 
         $connection = Database::connection();
-        $dead = DeadURL::deadAmong(array_keys($discoveries));
 
-        $hostCounts = [];
+        // Stored form first, exactly as the single-URL path does: url is
+        // varchar(767) and a longer one is a hard error, not a warning. The
+        // caller's own key is carried alongside so the returned map still
+        // answers to what it asked about; two callers' URLs that truncate to
+        // the same stored string are the same row, first key winning.
+        $stored = [];
 
         foreach ($discoveries as $urlString => $discovery) {
-            if (isset($dead[$urlString])) {
+            $storedURL = self::truncate($urlString, self::MAX_URL_LENGTH);
+
+            if (isset($stored[$storedURL])) {
+                $stored[$storedURL]['count'] += $discovery['count'];
                 continue;
             }
 
-            $hostName = $discovery['url'] -> host;
-            $hostCounts[$hostName] = ($hostCounts[$hostName] ?? 0) + $discovery['count'];
+            $stored[$storedURL] = ['key' => $urlString, 'discovery' => $discovery, 'count' => $discovery['count']];
+        }
+
+        $dead = DeadURL::deadAmong(array_keys($stored));
+        $hostCounts = [];
+
+        foreach ($stored as $storedURL => $entry) {
+            if (isset($dead[$storedURL])) {
+                continue;
+            }
+
+            $hostName = $entry['discovery']['url'] -> host;
+            $hostCounts[$hostName] = ($hostCounts[$hostName] ?? 0) + $entry['count'];
         }
 
         $hosts = Host::findOrCreateManyByName($hostCounts);
         $pending = [];
 
-        foreach ($discoveries as $urlString => $discovery) {
-            if (isset($dead[$urlString])) {
+        foreach ($stored as $storedURL => $entry) {
+            if (isset($dead[$storedURL])) {
                 continue;
             }
 
-            $host = $hosts[$discovery['url'] -> host] ?? null;
+            $host = $hosts[$entry['discovery']['url'] -> host] ?? null;
 
             if ($host === null || !$host -> hasPendingCapacity()) {
                 continue;
             }
 
             $host -> countNewPendingItem();
-            $pending[$urlString] = ['discovery' => $discovery, 'host' => $host];
+            $pending[$storedURL] = ['discovery' => $entry['discovery'], 'host' => $host, 'key' => $entry['key'], 'count' => $entry['count']];
         }
 
         if ($pending === []) {
@@ -473,13 +524,13 @@ INSERT INTO `Items` (`url`, `hostId`, `type`, `title`, `description`)
             $arguments = [];
             $types = '';
 
-            foreach ($chunk as $urlString => $entry) {
-                $arguments[] = $urlString;
+            foreach ($chunk as $storedURL => $entry) {
+                $arguments[] = $storedURL;
                 $arguments[] = $entry['host'] -> hostId;
                 $arguments[] = self::truncate($entry['discovery']['type'], self::MAX_TYPE_LENGTH);
                 $arguments[] = self::truncate($entry['discovery']['title'] ?? null, self::MAX_TITLE_LENGTH);
                 $arguments[] = self::truncate($entry['discovery']['description'], self::MAX_DESCRIPTION_LENGTH);
-                $arguments[] = $entry['discovery']['count'];
+                $arguments[] = $entry['count'];
                 $types .= 'sisssi';
             }
 
@@ -500,8 +551,14 @@ INSERT INTO `Items` (`url`, `hostId`, `type`, `title`, `description`, `inc`)
         foreach (array_chunk(array_keys($pending), self::BATCH_CHUNK_SIZE) as $chunk) {
             $placeholders = implode(', ', array_fill(0, count($chunk), '?'));
 
+            // Without fullText/fullHTML: this reads back a whole page's worth
+            // of freshly-upserted rows purely to learn their itemIds, and a
+            // rediscovered URL that has already been crawled would otherwise
+            // drag its entire stored page along for nothing.
             $select = mysqli_prepare($connection, '
-SELECT *
+SELECT `itemId`, `url`, `hostId`, `type`, `title`, `description`, `keywords`,
+        `crawledTime`, `noindex`, `contentHash`, `recrawlAfterSeconds`, `recrawlDueTime`,
+        `claimedUntil`, `inc`
     FROM `Items`
     WHERE `url` IN (' . $placeholders . ')
 ');
@@ -510,7 +567,9 @@ SELECT *
             $result = mysqli_stmt_get_result($select);
 
             while ($row = mysqli_fetch_assoc($result)) {
-                $items[$row['url']] = self::fromRow($row);
+                // Keyed by the caller's original URL, not the stored one, so
+                // a truncated URL still maps back to what was asked about.
+                $items[$pending[$row['url']]['key']] = self::fromRow($row);
             }
         }
 
@@ -672,8 +731,13 @@ UPDATE `Items`
 
             return $this;
         } catch (\mysqli_sql_exception) {
+            // Without the page content: the survivor is either about to be
+            // crawled and overwritten, or reported as already crawled and
+            // dropped. Neither reads what it currently stores.
             $select = mysqli_prepare($connection, '
-SELECT *
+SELECT `itemId`, `url`, `hostId`, `type`, `title`, `description`, `keywords`,
+        `crawledTime`, `noindex`, `contentHash`, `recrawlAfterSeconds`, `recrawlDueTime`,
+        `claimedUntil`, `inc`
     FROM `Items`
     WHERE `url` = ?
     LIMIT 1

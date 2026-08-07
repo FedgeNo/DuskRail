@@ -20,6 +20,11 @@ class WebSocketClient
     // far more than the kernel accepts in a single write.
     private const WRITE_TIMEOUT_SECONDS = 10.0;
 
+    // How much to pull off the socket at once when more is available than the
+    // caller asked for. A page's base64'd HTML arrives in many segments, and
+    // reading it in frame-sized slices was a syscall per slice.
+    private const READ_CHUNK_SIZE = 65536;
+
     /** @var resource */
     private $socket;
 
@@ -274,11 +279,19 @@ class WebSocketClient
         return ['fin' => $fin, 'opcode' => $opcode, 'payload' => $payload];
     }
 
+    /**
+     * Bytes already read past what a caller asked for. A CDP response and the
+     * events around it routinely arrive in one TCP segment, and reading
+     * exactly the requested count meant a stream_select() syscall per frame
+     * header, per length field, per payload - most of them returning
+     * instantly from data already in userspace. Anything over-read is kept
+     * here and served without touching the socket at all.
+     */
+    private string $buffer = '';
+
     private function readExactly(int $byteCount, float $deadline): ?string
     {
-        $data = '';
-
-        while (strlen($data) < $byteCount) {
+        while (strlen($this -> buffer) < $byteCount) {
             $remaining = $deadline - microtime(true);
 
             if ($remaining <= 0) {
@@ -294,7 +307,10 @@ class WebSocketClient
                 return null;
             }
 
-            $chunk = fread($this -> socket, $byteCount - strlen($data));
+            // Deliberately more than the caller needs: whatever else the peer
+            // has already sent comes along for free rather than costing
+            // another wait.
+            $chunk = fread($this -> socket, max($byteCount - strlen($this -> buffer), self::READ_CHUNK_SIZE));
 
             if ($chunk === false) {
                 return null;
@@ -308,8 +324,11 @@ class WebSocketClient
                 continue;
             }
 
-            $data .= $chunk;
+            $this -> buffer .= $chunk;
         }
+
+        $data = substr($this -> buffer, 0, $byteCount);
+        $this -> buffer = substr($this -> buffer, $byteCount);
 
         return $data;
     }
