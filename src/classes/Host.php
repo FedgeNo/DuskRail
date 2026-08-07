@@ -53,6 +53,10 @@ class Host
     // boundary, since half a rule is worse than no rule.
     private const MAX_ROBOTS_TXT_BYTES = 500 * 1024;
 
+    // Redirect hops followed while fetching robots.txt, matching what
+    // Google's own parser documents.
+    private const MAX_ROBOTS_TXT_REDIRECTS = 5;
+
     // How many not-yet-crawled items one host may have waiting at once. A
     // single large site can link thousands of URLs from one page; at a
     // 60-second politeness delay that's weeks of crawling for that host
@@ -328,22 +332,65 @@ UPDATE `Hosts`
      * happened and came back readable - the moment sitemap ingestion (see
      * Sitemap) is worth running, since the Sitemap: lines just arrived.
      */
-    public function fetchRobotsTxtIfStale(string $scheme): bool
+    public function fetchRobotsTxtIfStale(string $scheme, string $chromeEndpoint): bool
     {
         if (!$this -> isRobotsTxtStale()) {
             return false;
         }
 
-        $connection = new HTTPConnection(new URL($scheme . '://' . $this -> host . '/robots.txt'));
-        $body = $connection -> readBody();
-        $statusCode = $connection -> statusCode;
+        $url = new URL($scheme . '://' . $this -> host . '/robots.txt');
+        $statusCode = null;
+        $body = '';
 
-        // This is a real request against this host, same as fetching the
-        // page itself - without recording it here, first contact with a
-        // never-before-seen host would fire this request and the page
-        // request immediately back to back, before any politeness cooldown
-        // ever applied.
-        $this -> recordCrawl($statusCode !== null && in_array($statusCode, [429, 503], true));
+        // Fetched through the same browser every page goes through, not a
+        // plain HTTP client. Two reasons, both real: it's the same host the
+        // page fetch is about to hit, so the connection and handshake are
+        // already paid for, and - more importantly - the hosts that refuse
+        // plain clients outright are exactly the ones whose rules matter
+        // most. Those were answering nothing at all, which records as "rules
+        // unknown" and stops the host being crawled at all.
+        //
+        // ChromeConnection never follows a redirect (bin/crawler.php's own
+        // hop loop stays in control for pages), so the hops are walked here.
+        // Plenty of sites 301 /robots.txt to a canonical host, and treating
+        // that redirect as the answer would record "unreadable" for a host
+        // publishing perfectly good rules one hop away.
+        for ($hop = 0; $hop <= self::MAX_ROBOTS_TXT_REDIRECTS; $hop++) {
+            try {
+                $connection = new ChromeConnection($chromeEndpoint, $url, null);
+            } catch (\Throwable) {
+                // The shared browser is unreachable - an infrastructure
+                // problem, not an answer about this host. Nothing is
+                // recorded, so the rules stay as stale as they were and the
+                // next run asks again rather than banking a false verdict.
+                return false;
+            }
+
+            $statusCode = $connection -> statusCode;
+
+            // Every hop is a real request against this host, same as fetching
+            // a page - without recording it, first contact with a
+            // never-before-seen host would fire these and the page request
+            // back to back, before any politeness cooldown applied.
+            $this -> recordCrawl($statusCode !== null && in_array($statusCode, [429, 503], true));
+
+            if ($statusCode === null || $statusCode < 300 || $statusCode >= 400) {
+                $body = $connection -> readBody();
+                break;
+            }
+
+            $location = $connection -> headers['location'] ?? null;
+
+            if ($location === null) {
+                break;
+            }
+
+            $url = $url -> resolve(new URL($location));
+
+            if (!$url -> isValid()) {
+                break;
+            }
+        }
 
         if ($statusCode !== null && $statusCode >= 200 && $statusCode < 300) {
             $this -> robotsTxt = self::capRobotsTxt($body);

@@ -45,11 +45,11 @@ function recordHostCrawl(Host $host, ?int $statusCode): void
  * known to be fresh, and it puts sitemap ingestion on exactly the same
  * weekly-per-host cadence as the rules themselves.
  */
-function hostFor(URL $url): Host
+function hostFor(URL $url, string $chromeEndpoint): Host
 {
     $host = Host::findOrCreateByName($url -> host);
 
-    if ($host -> fetchRobotsTxtIfStale($url -> scheme) && $host -> robotsTxt !== null && $host -> robotsTxt !== '') {
+    if ($host -> fetchRobotsTxtIfStale($url -> scheme, $chromeEndpoint) && $host -> robotsTxt !== null && $host -> robotsTxt !== '') {
         $queued = Sitemap::ingestFor($host, $host -> robotsTxt);
 
         if ($queued > 0) {
@@ -174,7 +174,7 @@ echo 'Next up: ' . $item -> url . ' (itemId ' . $item -> itemId . ')
 file_put_contents($currentItemFile, (string) $item -> itemId);
 
 $pageURL = new URL($item -> url);
-$host = hostFor($pageURL);
+$host = hostFor($pageURL, $chromeEndpoint);
 $permission = crawlPermission($host, $pageURL);
 
 if ($permission === 'robots-unknown') {
@@ -303,7 +303,7 @@ for ($hop = 0; in_array($connection -> statusCode, REDIRECT_STATUS_CODES, true);
     file_put_contents($currentItemFile, (string) $item -> itemId);
 
     $pageURL = new URL($item -> url);
-    $host = hostFor($pageURL);
+    $host = hostFor($pageURL, $chromeEndpoint);
     $permission = crawlPermission($host, $pageURL);
 
     if ($permission === 'robots-unknown') {
