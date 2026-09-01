@@ -407,16 +407,25 @@ UPDATE `Items`
             return null;
         }
 
-        // Besides the inc bump, a rediscovery fills in a title/description
-        // the row doesn't have yet - COALESCE keeps whatever's already there,
-        // so nothing a crawl extracted (or an earlier link supplied) is ever
-        // overwritten, but a row created from a bare href with no text does
-        // pick up the first real description some later link gives it.
+        // A rediscovery fills in a title/description the row doesn't have yet
+        // - COALESCE keeps whatever's already there, so nothing a crawl
+        // extracted (or an earlier link supplied) is ever overwritten, but a
+        // row created from a bare href with no text does pick up the first
+        // real description some later link gives it.
+        //
+        // inc is untouched here, and starts at zero. It counts the distinct
+        // pages that link to a URL, and this path is for URLs that arrived
+        // some other way entirely - a sitemap entry or an operator's seed,
+        // neither of which is anybody linking to anything. Bumping it per
+        // call would also let a sitemap listing the same URL repeatedly raise
+        // it once a week for free. LAST_INSERT_ID() on the duplicate branch
+        // keeps mysqli_insert_id() returning the existing row's id without a
+        // counter being incremented to force it.
         $insert = mysqli_prepare($connection, '
-INSERT INTO `Items` (`url`, `hostId`, `type`, `title`, `description`)
-    VALUES (?, ?, ?, ?, ?)
+INSERT INTO `Items` (`url`, `hostId`, `type`, `title`, `description`, `inc`)
+    VALUES (?, ?, ?, ?, ?, 0)
     ON DUPLICATE KEY UPDATE
-        `inc` = `inc` + 1,
+        `itemId` = LAST_INSERT_ID(`itemId`),
         `title` = COALESCE(`title`, VALUES(`title`)),
         `description` = COALESCE(`description`, VALUES(`description`))
 ');
@@ -453,9 +462,10 @@ INSERT INTO `Items` (`url`, `hostId`, `type`, `title`, `description`)
      * and, on a fast host, more than fetching it.
      *
      * $discoveries is url => ['url' => URL, 'type' => string,
-     * 'description' => ?string, 'count' => int], where count is how many
-     * times the page referred to that URL, so `inc` lands where per-link
-     * calls would have left it.
+     * 'description' => ?string, 'count' => int]. count is 1 per discovered
+     * URL - a page mentioning the same target ten times is one page linking
+     * it - and only feeds Hosts.inc; Items.inc is raised separately, by
+     * countInboundLinks(), off the link edges that were actually new.
      *
      * @return array<string, self>
      */
@@ -520,7 +530,7 @@ INSERT INTO `Items` (`url`, `hostId`, `type`, `title`, `description`)
         }
 
         foreach (array_chunk($pending, self::BATCH_CHUNK_SIZE, true) as $chunk) {
-            $rows = implode(', ', array_fill(0, count($chunk), '(?, ?, ?, ?, ?, ?)'));
+            $rows = implode(', ', array_fill(0, count($chunk), '(?, ?, ?, ?, ?, 0)'));
             $arguments = [];
             $types = '';
 
@@ -530,15 +540,19 @@ INSERT INTO `Items` (`url`, `hostId`, `type`, `title`, `description`)
                 $arguments[] = self::truncate($entry['discovery']['type'], self::MAX_TYPE_LENGTH);
                 $arguments[] = self::truncate($entry['discovery']['title'] ?? null, self::MAX_TITLE_LENGTH);
                 $arguments[] = self::truncate($entry['discovery']['description'], self::MAX_DESCRIPTION_LENGTH);
-                $arguments[] = $entry['count'];
-                $types .= 'sisssi';
+                $types .= 'sisss';
             }
 
+            // inc is not touched here. Discovering a URL is not the same
+            // event as a new page linking to it: a recrawl rediscovers every
+            // link the page already had, so counting those would let a site
+            // raise any URL's score forever just by being recrawled.
+            // countInboundLinks() does the counting, off the link edges that
+            // turn out to be genuinely new.
             $insert = mysqli_prepare($connection, '
 INSERT INTO `Items` (`url`, `hostId`, `type`, `title`, `description`, `inc`)
     VALUES ' . $rows . '
     ON DUPLICATE KEY UPDATE
-        `inc` = `inc` + VALUES(`inc`),
         `title` = COALESCE(`title`, VALUES(`title`)),
         `description` = COALESCE(`description`, VALUES(`description`))
 ');
@@ -547,6 +561,20 @@ INSERT INTO `Items` (`url`, `hostId`, `type`, `title`, `description`, `inc`)
         }
 
         $items = [];
+
+        // Items.url is a utf8mb4_unicode_ci column, so both the unique index
+        // and the IN () below compare case-insensitively: a page linking
+        // "/give-to-agu" when the row on file says "/Give-to-AGU" upserts
+        // into that existing row and reads it back under the spelling the
+        // *database* holds, not the one asked for. Looking $pending up by the
+        // URL that comes back therefore misses, losing the link its edge.
+        // Folding both sides makes this lookup agree with the matching the
+        // database does.
+        $byFoldedURL = [];
+
+        foreach ($pending as $storedURL => $entry) {
+            $byFoldedURL[mb_strtolower($storedURL)] = $entry;
+        }
 
         foreach (array_chunk(array_keys($pending), self::BATCH_CHUNK_SIZE) as $chunk) {
             $placeholders = implode(', ', array_fill(0, count($chunk), '?'));
@@ -569,11 +597,54 @@ SELECT `itemId`, `url`, `hostId`, `type`, `title`, `description`, `keywords`,
             while ($row = mysqli_fetch_assoc($result)) {
                 // Keyed by the caller's original URL, not the stored one, so
                 // a truncated URL still maps back to what was asked about.
-                $items[$pending[$row['url']]['key']] = self::fromRow($row);
+                // A row that matched under a collation equivalence this
+                // folding doesn't reproduce (utf8mb4_unicode_ci also folds
+                // accents, and more besides) is dropped rather than keyed by
+                // nothing - the caller never asked about it under any name it
+                // would recognize.
+                $entry = $byFoldedURL[mb_strtolower($row['url'])] ?? null;
+
+                if ($entry !== null) {
+                    $items[$entry['key']] = self::fromRow($row);
+                }
             }
         }
 
         return $items;
+    }
+
+    /**
+     * Counts one newly-recorded inbound link against each of $itemIds -
+     * called with exactly the link edges Link::createMany() actually created,
+     * so `inc` ends up meaning "how many distinct pages link here" rather
+     * than "how many times has anything mentioned this URL".
+     *
+     * The distinction is the whole point of the column as a ranking signal.
+     * Counted per mention, a single page raises the number by itself, by
+     * repeating a link or simply by being recrawled - and a signal a page can
+     * set about itself is not a signal.
+     *
+     * @param list<int> $itemIds
+     */
+    public static function countInboundLinks(array $itemIds): void
+    {
+        if ($itemIds === []) {
+            return;
+        }
+
+        $connection = Database::connection();
+
+        foreach (array_chunk($itemIds, self::BATCH_CHUNK_SIZE) as $chunk) {
+            $placeholders = implode(', ', array_fill(0, count($chunk), '?'));
+
+            $update = mysqli_prepare($connection, '
+UPDATE `Items`
+    SET `inc` = `inc` + 1
+    WHERE `itemId` IN (' . $placeholders . ')
+');
+            mysqli_stmt_bind_param($update, str_repeat('i', count($chunk)), ...$chunk);
+            mysqli_stmt_execute($update);
+        }
     }
 
     /**
@@ -609,6 +680,15 @@ SELECT `itemId`, `url`, `hostId`, `type`, `title`, `description`, `keywords`,
         $description = self::truncate($description, self::MAX_DESCRIPTION_LENGTH);
         $keywords = self::truncate($keywords, self::MAX_KEYWORDS_LENGTH);
 
+        // Applied here rather than at each of the places text is extracted
+        // (HTML body, PDF, plain text) because this is the one call all of
+        // them end at - a cap a future content type could be added around is
+        // no cap at all. See Text::capRepeatedTerms() for why an unbounded
+        // term count decides rankings outright.
+        $fullText = $fullText !== null ? Text::capRepeatedTerms($fullText) : null;
+
+        // Hashed after capping, so the recrawl schedule compares what's
+        // actually stored against what was actually stored last time.
         $contentHash = sha1((string) $fullText);
         $recrawlAfterSeconds = $contentHash === $this -> contentHash
             ? min(($this -> recrawlAfterSeconds ?? self::RECRAWL_BASE_SECONDS) * 2, self::RECRAWL_MAX_SECONDS)

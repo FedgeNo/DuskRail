@@ -3,10 +3,10 @@
 declare(strict_types=1);
 
 /**
- * The Bootstrap stylesheet, served from this site rather than a CDN. Local
- * because it was the one external asset - with it vendored, the Content
- * Security Policy (see HTMLDocument) can say styles only ever come from
- * here, and pages keep working with no third party up or reachable.
+ * The Bootstrap stylesheet, served from this site rather than a CDN. Vendored
+ * so the Content Security Policy (see HTMLDocument) can say styles only ever
+ * come from here, and so pages keep working with no third party up or
+ * reachable.
  */
 class BootstrapLink extends LinkTag
 {

@@ -6,6 +6,11 @@ class URL
 {
     private const DEFAULT_PORTS = ['http' => 80, 'https' => 443];
 
+    // The lengths DNS itself imposes on a name and on any one of its labels
+    // (RFC 1035) - see isHostnameShapedLikeOne().
+    private const MAX_HOST_LENGTH = 253;
+    private const MAX_HOST_LABEL_LENGTH = 63;
+
     // Only well-known, unambiguous tracking-only params - never anything
     // generic enough ("ref", "source") that a real site might use for actual
     // functional/navigational state. Stripped once here, at construction, so
@@ -137,13 +142,40 @@ class URL
      */
     public function isValid(): bool
     {
-        if (!in_array($this -> scheme, ['http', 'https'], true) || $this -> host === '') {
+        if (!in_array($this -> scheme, ['http', 'https'], true) || $this -> host === '' || !self::isHostnameShapedLikeOne($this -> host)) {
             return false;
         }
 
         $lastDot = strrpos($this -> host, '.');
 
         return $lastDot !== false && TLDs::isValid(substr($this -> host, $lastDot + 1));
+    }
+
+    /**
+     * Whether the host is within the lengths DNS actually permits - 253
+     * characters for the whole name, 63 for any one label, and no empty
+     * label ("a..example.com"). Nothing longer resolves anywhere, so this
+     * rules out no real site.
+     *
+     * It has to be checked before the name is used rather than left to fail
+     * naturally, because the first thing that happens to a discovered host is
+     * an INSERT into a varchar(255) column: an anchor carrying a 300-character
+     * hostname (which any page can print) is a "Data too long" exception that
+     * takes the whole worker down mid-crawl, on every retry, forever.
+     */
+    private static function isHostnameShapedLikeOne(string $host): bool
+    {
+        if (mb_strlen($host) > self::MAX_HOST_LENGTH) {
+            return false;
+        }
+
+        foreach (explode('.', $host) as $label) {
+            if ($label === '' || mb_strlen($label) > self::MAX_HOST_LABEL_LENGTH) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /**

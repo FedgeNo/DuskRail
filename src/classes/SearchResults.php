@@ -5,12 +5,24 @@ declare(strict_types=1);
 /**
  * One page of search results for a query.
  *
- * Ranked by how many distinct *hosts* link to a result with anchor text that
- * also matches the query - distinct hosts, not raw link rows, because ten
- * links from one site are one site's opinion, not ten. Ties break on the
- * item's own FULLTEXT relevance, then on how often the URL has been seen
- * linked anywhere (Items.inc - a cheap popularity signal), then on itemId so
- * OFFSET paging never shuffles.
+ * Ranked by how many distinct *domains* link to a result with anchor text
+ * that also matches the query. Ten links from one site are one site's
+ * opinion, not ten, and so are links from a.evil.com, b.evil.com and every
+ * other hostname one registered domain mints from a wildcard DNS record -
+ * counting hostnames makes that manipulation free, while the registrable
+ * domain (PublicSuffixList, stored per host as Hosts.domain) is the unit
+ * somebody pays a registrar for.
+ *
+ * A page's own domain never counts toward its link signal. Four out of five
+ * link edges are a site linking itself, and while those are genuine
+ * navigation they are not anyone's opinion of the page: counted, they hand
+ * every site the +1 that decides the top of the results for any query where
+ * nothing else has a link match, for the price of linking its own page with
+ * the right anchor text.
+ *
+ * Ties break on the item's own FULLTEXT relevance, then on how many distinct
+ * pages link to it (Items.inc), then on itemId so OFFSET paging never
+ * shuffles.
  *
  * A query containing double quotes runs in BOOLEAN MODE, which is what gives
  * quoted phrases their exact-phrase meaning; everything else stays in
@@ -90,9 +102,9 @@ class SearchResults
      * The linkMatches count comes from joining a derived table of the Links
      * rows whose anchor text matches, not from a correlated subquery per row.
      * The correlated form reads better and is what this project reaches for
-     * by default, but it re-runs a FULLTEXT match once per candidate item:
-     * measured at 2.2 seconds against 19ms for identical results, getting
-     * worse in proportion to how well the query matches.
+     * by default, but it re-runs a FULLTEXT match once per candidate item -
+     * 2.2 seconds against 19ms for identical results, and worse in
+     * proportion to how well the query matches.
      *
      * The snippet is cut in SQL around the first occurrence of the query's
      * first real word, rather than pulling whole fullText columns (routinely
@@ -114,7 +126,7 @@ class SearchResults
         // rows only. The outer stage joins the full Items rows by primary
         // key for display fields and cuts the snippet - LOCATE/SUBSTRING
         // over fullText runs against just the page that survived the LIMIT,
-        // never against every match (measured at a full second that way).
+        // never against every match - inline it costs a full second.
         $select = mysqli_prepare(Database::connection(), '
 SELECT `ranked`.*, `Items`.`url`, `Items`.`type`, `Items`.`title`, `Items`.`description`,
         LOCATE(?, `Items`.`fullText`) AS `matchPosition`,
@@ -124,22 +136,25 @@ SELECT `ranked`.*, `Items`.`url`, `Items`.`type`, `Items`.`title`, `Items`.`desc
         END AS `snippet`
     FROM (
         SELECT `pool`.`itemId`, `pool`.`inc`, `pool`.`relevance`,
-                COUNT(DISTINCT `matchingLinks`.`hostId`) AS `linkMatches`
+                COUNT(DISTINCT CASE WHEN `matchingLinks`.`domain` <> `PoolHosts`.`domain`
+                    THEN `matchingLinks`.`domain` END) AS `linkMatches`
             FROM (
-                SELECT `Items`.`itemId`, `Items`.`inc`,
-                        MATCH(`Items`.`title`, `Items`.`description`, `Items`.`keywords`, `Items`.`fullText`) AGAINST (?' . $mode . ') AS `relevance`
+                SELECT `Items`.`itemId`, `Items`.`inc`, `Items`.`hostId`,
+                        MATCH(`Items`.`title`, `Items`.`description`, `Items`.`fullText`) AGAINST (?' . $mode . ') AS `relevance`
                     FROM `Items`
                     WHERE `Items`.`crawledTime` IS NOT NULL
                         AND `Items`.`noindex` = 0
                         AND ' . ($this -> type === 'image' ? self::IMAGE_TYPE_CONDITION : self::PAGE_TYPE_CONDITION) . '
-                        AND MATCH(`Items`.`title`, `Items`.`description`, `Items`.`keywords`, `Items`.`fullText`) AGAINST (?' . $mode . ')
+                        AND MATCH(`Items`.`title`, `Items`.`description`, `Items`.`fullText`) AGAINST (?' . $mode . ')
                     ORDER BY `relevance` DESC
                     LIMIT ?
             ) AS `pool`
+            INNER JOIN `Hosts` AS `PoolHosts` ON `PoolHosts`.`hostId` = `pool`.`hostId`
             LEFT JOIN (
-                SELECT `Links`.`childId`, `ParentItems`.`hostId`
+                SELECT `Links`.`childId`, `ParentHosts`.`domain`
                     FROM `Links`
                     INNER JOIN `Items` AS `ParentItems` ON `ParentItems`.`itemId` = `Links`.`parentId`
+                    INNER JOIN `Hosts` AS `ParentHosts` ON `ParentHosts`.`hostId` = `ParentItems`.`hostId`
                     WHERE MATCH(`Links`.`description`) AGAINST (?' . $mode . ')
             ) AS `matchingLinks` ON `matchingLinks`.`childId` = `pool`.`itemId`
             GROUP BY `pool`.`itemId`

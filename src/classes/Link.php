@@ -49,16 +49,25 @@ INSERT IGNORE INTO `Links` (`parentId`, `childId`, `description`)
      * Records a whole page's links at once - $links is childId => description.
      * Same INSERT IGNORE semantics as create(), including dropping a page's
      * link to itself, in one statement per chunk instead of one per link.
+     *
+     * Returns the childIds that were genuinely new edges, i.e. the ones this
+     * parent had never linked before. Item::countInboundLinks() needs exactly
+     * that set: a recrawl re-reports every link the page already had, and
+     * counting those as fresh endorsements would let any page inflate a URL's
+     * standing simply by existing long enough to be recrawled.
+     *
+     * @return list<int>
      */
-    public static function createMany(int $parentId, array $links): void
+    public static function createMany(int $parentId, array $links): array
     {
         unset($links[$parentId]);
 
         if ($links === []) {
-            return;
+            return [];
         }
 
         $connection = Database::connection();
+        $newChildIds = array_values(array_diff(array_keys($links), self::existingChildIds($parentId, array_keys($links))));
 
         foreach (array_chunk($links, self::BATCH_CHUNK_SIZE, true) as $chunk) {
             $rows = implode(', ', array_fill(0, count($chunk), '(?, ?, ?)'));
@@ -79,6 +88,42 @@ INSERT IGNORE INTO `Links` (`parentId`, `childId`, `description`)
             mysqli_stmt_bind_param($insert, $types, ...$arguments);
             mysqli_stmt_execute($insert);
         }
+
+        return $newChildIds;
+    }
+
+    /**
+     * Which of $childIds this parent already links to. Read before the insert
+     * rather than inferred from it: INSERT IGNORE reports how many rows it
+     * added but not which ones, and the caller needs the identities.
+     *
+     * @param list<int> $childIds
+     * @return list<int>
+     */
+    private static function existingChildIds(int $parentId, array $childIds): array
+    {
+        $connection = Database::connection();
+        $existing = [];
+
+        foreach (array_chunk($childIds, self::BATCH_CHUNK_SIZE) as $chunk) {
+            $placeholders = implode(', ', array_fill(0, count($chunk), '?'));
+
+            $select = mysqli_prepare($connection, '
+SELECT `childId`
+    FROM `Links`
+    WHERE `parentId` = ?
+        AND `childId` IN (' . $placeholders . ')
+');
+            mysqli_stmt_bind_param($select, 'i' . str_repeat('i', count($chunk)), $parentId, ...$chunk);
+            mysqli_stmt_execute($select);
+            $result = mysqli_stmt_get_result($select);
+
+            while ($row = mysqli_fetch_assoc($result)) {
+                $existing[] = (int) $row['childId'];
+            }
+        }
+
+        return $existing;
     }
 
     /**

@@ -12,8 +12,9 @@ declare(strict_types=1);
  * TTL_SECONDS: counting means reading an index entry for every crawled row,
  * which is nothing at thousands and a real scan at millions - and this sits
  * on the public home page, where "per visitor" multiplies whatever it costs.
- * Sixty seconds of staleness on a decorative count is invisible; the cache
- * refresh costs one visitor per minute the price everyone used to pay.
+ * Sixty seconds of staleness on a decorative count is invisible, and the
+ * refresh charges one visitor a minute what every visitor would otherwise
+ * pay.
  */
 class IndexStats extends HTMLObject
 {

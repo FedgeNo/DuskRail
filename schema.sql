@@ -8,6 +8,7 @@
 CREATE TABLE `Hosts` (
   `hostId` int(10) unsigned NOT NULL AUTO_INCREMENT,
   `host` varchar(255) NOT NULL,
+  `domain` varchar(255) NOT NULL DEFAULT '',
   `robotsTxt` mediumtext DEFAULT NULL,
   `robotsTxtFetched` tinyint(1) unsigned NOT NULL DEFAULT 0,
   `robotsTxtFetchedTime` int(10) unsigned DEFAULT NULL,
@@ -43,7 +44,7 @@ CREATE TABLE `Items` (
   KEY `hostId_crawledTime` (`hostId`,`crawledTime`),
   KEY `crawledTime_type` (`crawledTime`,`type`),
   KEY `recrawlDueTime` (`recrawlDueTime`),
-  FULLTEXT KEY `title_description_keywords_fullText` (`title`,`description`,`keywords`,`fullText`),
+  FULLTEXT KEY `title_description_fullText` (`title`,`description`,`fullText`),
   CONSTRAINT `Items_ibfk_1` FOREIGN KEY (`hostId`) REFERENCES `Hosts` (`hostId`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 

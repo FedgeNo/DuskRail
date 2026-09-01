@@ -53,14 +53,19 @@ class HTTPConnection
             CURLOPT_URL => $url -> toString(),
             CURLOPT_PORT => $url -> port,
             CURLOPT_HTTPGET => true,
-            // Redirects are followed here, unlike ChromeConnection, where the
-            // crawler drives every hop itself. Nothing about robots.txt needs
-            // per-hop control, and not following was actively wrong: plenty
-            // of sites 301 /robots.txt to a canonical host, and treating that
-            // redirect as the answer recorded "couldn't read it" for a host
-            // that publishes a perfectly good one a single hop away.
-            CURLOPT_FOLLOWLOCATION => true,
-            CURLOPT_MAXREDIRS => 5,
+            // Redirects are never followed automatically. A Location header
+            // is chosen entirely by the host being fetched, and following one
+            // without looking is how a sitemap that passed every same-host
+            // check ends up pointing this process at localhost. Callers that
+            // want the hop take it themselves, against the same rules the
+            // original URL was held to (see Sitemap::ingestFor()).
+            CURLOPT_FOLLOWLOCATION => false,
+            // Belt and braces alongside that: even a caller that turns
+            // following back on can only ever be redirected to the two
+            // schemes this project fetches, never to a file:// or any other
+            // protocol this build of curl happens to support.
+            CURLOPT_PROTOCOLS_STR => 'http,https',
+            CURLOPT_REDIR_PROTOCOLS_STR => 'http,https',
             CURLOPT_CONNECTTIMEOUT => 10,
             // A connect timeout alone only covers getting the connection open
             // - a server that accepts it and then sends nothing would hold

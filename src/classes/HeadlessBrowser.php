@@ -189,7 +189,9 @@ class HeadlessBrowser
             return;
         }
 
-        if (self::isBlocked((string) ($params['request']['url'] ?? ''))) {
+        $url = (string) ($params['request']['url'] ?? '');
+
+        if (!self::isReachableTarget($url) || self::isBlocked($url)) {
             $tab -> sendCommand('Fetch.failRequest', ['requestId' => $requestId, 'errorReason' => 'BlockedByClient']);
 
             return;
@@ -199,6 +201,46 @@ class HeadlessBrowser
         // fetch, images, iframes, ...) proceeds over the real network
         // unchanged - only the top-level document is ever swapped out here.
         $tab -> sendCommand('Fetch.continueRequest', ['requestId' => $requestId]);
+    }
+
+    /**
+     * Whether $url is somewhere this crawler is willing to let a page reach.
+     *
+     * This is the one place in the whole crawler where untrusted markup
+     * actually runs, with a real origin and real network access, and it is
+     * reached on the page's own say-so - JS_CHALLENGE_TITLES is matched
+     * against a <title>, which any site can set to anything. Everything the
+     * page then asks for is a request this process makes on its behalf, so
+     * "anywhere at all" is not an acceptable range: without this, a page that
+     * calls itself "Just a moment..." can have subresources fetched from
+     * localhost, from the machine's own network, or from the DevTools port
+     * that drives this very browser.
+     *
+     * Only http(s) is allowed through, and only to somewhere on the public
+     * internet - resolved for real rather than pattern-matched on the name,
+     * since a name is not an address (see IPAddress).
+     */
+    private static function isReachableTarget(string $url): bool
+    {
+        $scheme = strtolower((string) parse_url($url, PHP_URL_SCHEME));
+        $host = strtolower((string) parse_url($url, PHP_URL_HOST));
+
+        if (!in_array($scheme, ['http', 'https'], true) || $host === '') {
+            return false;
+        }
+
+        // parse_url keeps an IPv6 literal's brackets ("[::1]"), which are URL
+        // syntax rather than part of the address.
+        $host = trim($host, '[]');
+
+        // Written as an address, it's judged as one; written as a name, it's
+        // whatever that name resolves to. Both spellings reach the same
+        // machine, so both have to be asked the same question.
+        if (filter_var($host, FILTER_VALIDATE_IP) !== false) {
+            return IPAddress::isPubliclyRoutable($host);
+        }
+
+        return IPAddress::hostResolvesPublicly($host);
     }
 
     /**

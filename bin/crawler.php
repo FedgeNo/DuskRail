@@ -24,6 +24,11 @@ const RATE_LIMITED_STATUS_CODES = [429, 503];
 const MAX_REDIRECTS = 10;
 const JS_CHALLENGE_TITLES = ['Just a moment...'];
 
+// Well under bin/crawler-manager.php's hang-kill timeout, so a PDF that won't
+// extract costs this run a few seconds rather than the whole worker.
+const PDF_EXTRACT_TIMEOUT_SECONDS = 20;
+const PDF_EXTRACT_STALE_SECONDS = 3600;
+
 /**
  * Every actual request made (each redirect hop, and the final fetch) counts
  * toward that host's politeness cooldown, not just the one that happened to
@@ -44,10 +49,20 @@ function recordHostCrawl(Host $host, ?int $statusCode): void
  * Piggybacked here because this is the one moment the Sitemap: lines are
  * known to be fresh, and it puts sitemap ingestion on exactly the same
  * weekly-per-host cadence as the rules themselves.
+ *
+ * Null when the hostname resolves somewhere this crawler won't send a
+ * request (Host::isPubliclyRoutable()). Checked here rather than alongside
+ * the robots.txt verdict in crawlPermission(), because reading robots.txt is
+ * itself a request to the host - by the time there's a verdict to check, the
+ * request the check exists to prevent has already gone out.
  */
-function hostFor(URL $url, string $chromeEndpoint): Host
+function hostFor(URL $url, string $chromeEndpoint): ?Host
 {
     $host = Host::findOrCreateByName($url -> host);
+
+    if (!$host -> isPubliclyRoutable()) {
+        return null;
+    }
 
     if ($host -> fetchRobotsTxtIfStale($url -> scheme, $chromeEndpoint) && $host -> robotsTxt !== null && $host -> robotsTxt !== '') {
         $queued = Sitemap::ingestFor($host, $host -> robotsTxt);
@@ -95,10 +110,34 @@ function pdf_to_text(string $pdf): string
     $path = VAR_DIR . '/pdf-extract-' . getmypid() . '.pdf';
     file_put_contents($path, $pdf);
 
-    $text = (string) shell_exec('pdftotext -q -enc UTF-8 ' . escapeshellarg($path) . ' - 2>/dev/null');
+    // Run under a timeout: the PDF is a file the site being crawled wrote,
+    // and a crafted one can keep pdftotext busy indefinitely. Without a limit
+    // of its own here, the only thing that ever ends it is
+    // bin/crawler-manager.php SIGKILLing the whole worker - which charges the
+    // item a hang strike and, three of those in, deletes it, for what is
+    // really just a file this crawler can't read.
+    $text = (string) shell_exec(
+        'timeout ' . PDF_EXTRACT_TIMEOUT_SECONDS . ' pdftotext -q -enc UTF-8 ' . escapeshellarg($path) . ' - 2>/dev/null'
+    );
     unlink($path);
+    sweep_stale_pdf_extracts();
 
     return HTMLLoader::normalizeWhitespace($text);
+}
+
+/**
+ * Removes PDF scratch files left behind by workers that were killed between
+ * writing one and unlinking it. Each is named for the pid that wrote it, so
+ * they're only ever reclaimed by chance otherwise - and a site serving PDFs
+ * that reliably hang the extractor gets to leave one behind per attempt.
+ */
+function sweep_stale_pdf_extracts(): void
+{
+    foreach (glob(VAR_DIR . '/pdf-extract-*.pdf') ?: [] as $path) {
+        if (is_file($path) && time() - (int) filemtime($path) > PDF_EXTRACT_STALE_SECONDS) {
+            @unlink($path);
+        }
+    }
 }
 
 /**
@@ -175,6 +214,14 @@ file_put_contents($currentItemFile, (string) $item -> itemId);
 
 $pageURL = new URL($item -> url);
 $host = hostFor($pageURL, $chromeEndpoint);
+
+if ($host === null) {
+    $item -> delete('private-address');
+    echo 'Host resolves to a private or reserved address, deleted this item.
+';
+    exit(0);
+}
+
 $permission = crawlPermission($host, $pageURL);
 
 if ($permission === 'robots-unknown') {
@@ -304,6 +351,17 @@ for ($hop = 0; in_array($connection -> statusCode, REDIRECT_STATUS_CODES, true);
 
     $pageURL = new URL($item -> url);
     $host = hostFor($pageURL, $chromeEndpoint);
+
+    // A redirect is the most direct way to aim this crawler at an address it
+    // would never have followed a link to: the URL that was checked and the
+    // URL that gets fetched are, by definition, not the same one.
+    if ($host === null) {
+        $item -> delete('private-address');
+        echo 'Redirect target\'s host resolves to a private or reserved address, deleted this item.
+';
+        exit(0);
+    }
+
     $permission = crawlPermission($host, $pageURL);
 
     if ($permission === 'robots-unknown') {
@@ -594,8 +652,11 @@ $anchorLinks = HTMLLoader::extractAnchorLinks($document, $baseURL);
 // links hundreds of URLs and the per-link round trips to record them cost
 // more than parsing the page - collecting first means one batch of
 // statements instead of five per link (see Item::findOrCreateManyByURL()).
-// Keyed by normalized URL, so a page referring to the same target twice is
-// one queue entry carrying a count of two, which is what `inc` counts.
+// Keyed by normalized URL. A page referring to the same target twice is one
+// discovery, not two: `inc` says how many *pages* point at a URL, and letting
+// one page's repetitions add up makes it a number that page sets for itself.
+// A single page can otherwise run one URL's `inc` into the hundreds off one
+// link edge, past URLs linked from hundreds of pages across dozens of domains.
 $discoveries = [];
 
 foreach ($images as $image) {
@@ -611,7 +672,6 @@ foreach ($images as $image) {
     $urlString = $image['url'] -> toString();
 
     if (isset($discoveries[$urlString])) {
-        $discoveries[$urlString]['count']++;
         continue;
     }
 
@@ -641,7 +701,6 @@ foreach ($anchorLinks as $link) {
     $urlString = $link['url'] -> toString();
 
     if (isset($discoveries[$urlString])) {
-        $discoveries[$urlString]['count']++;
         continue;
     }
 
@@ -665,7 +724,10 @@ foreach ($discovered as $urlString => $discoveredItem) {
     $links[$discoveredItem -> itemId] = $discoveries[$urlString]['description'];
 }
 
-Link::createMany($item -> itemId, $links);
+// inc counts distinct linking pages, so it's raised off the edges that were
+// actually new rather than off every link the page happens to carry this
+// time round.
+Item::countInboundLinks(Link::createMany($item -> itemId, $links));
 
 echo 'Saved ' . count($discovered) . ' of ' . count($discoveries) . ' discovered URLs (' . count($images) . ' images, ' . count($anchorLinks) . ' links on the page).
 ';

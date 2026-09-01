@@ -130,6 +130,18 @@ class ChromeTab
             throw new \RuntimeException('Failed to create a Chrome browser context');
         }
 
+        // Nothing this browser does should ever put a file on disk. A page
+        // that renders for real (HeadlessBrowser::resolveChallenge()) can
+        // start a download without being asked to - a Content-Disposition
+        // header on any subresource is enough - and it would land in the
+        // service user's home directory, unbounded and read by nothing.
+        // Sent without waiting for the reply: CDP answers commands in order,
+        // so this is in force before the target created next exists.
+        $this -> sendBrowserCommand('Browser.setDownloadBehavior', [
+            'behavior' => 'deny',
+            'browserContextId' => $contextId,
+        ]);
+
         return $contextId;
     }
 

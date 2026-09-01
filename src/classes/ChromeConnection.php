@@ -109,11 +109,10 @@ class ChromeConnection
                 'bitness' => '64',
             ],
         ]);
-        // Only the Response stage is intercepted. The Request stage was
-        // paused solely to let it straight through again, which cost a
-        // pause, a round trip and a resume on every single fetch to reach
-        // the same place - bin/crawler.php has already decided this exact
-        // URL is worth fetching before this class is constructed.
+        // Only the Response stage is intercepted. Pausing at the Request
+        // stage too costs a pause, a round trip and a resume on every fetch
+        // to reach the same place: bin/crawler.php has already decided this
+        // exact URL is worth fetching before this class is constructed.
         $tab -> sendCommand('Fetch.enable', ['patterns' => [
             ['urlPattern' => '*', 'requestStage' => 'Response', 'resourceType' => 'Document'],
         ]]);
@@ -154,9 +153,15 @@ class ChromeConnection
 
     private function handleRequestPaused(ChromeTab $tab, array $params, ?int &$bodyRequestId, ?string &$pendingRequestId): bool
     {
-        $this -> statusCode = $params['responseStatusCode'];
+        // Both are documented as present at the Response stage but are
+        // optional in the protocol, and a request paused with a network-level
+        // error carries neither. Read defensively: statusCode staying null is
+        // already this class's word for "no response came back", which is
+        // exactly what that is, and warning about a missing key on the way
+        // there would be noise rather than news.
+        $this -> statusCode = $params['responseStatusCode'] ?? null;
 
-        foreach ($params['responseHeaders'] as $header) {
+        foreach ($params['responseHeaders'] ?? [] as $header) {
             $this -> headers[strtolower($header['name'])] = $header['value'];
         }
 

@@ -38,7 +38,11 @@ and a small AJAX front end to search it.
   JavaScript for real (its own verification fetch, redirect, reload) and
   hands back the resulting page; the item is still indexed if no challenge
   or headless browser is available, without ever fetching the challenge a
-  second time.
+  second time. This is the only path where a crawled page actually executes,
+  and it's entered on the page's own say-so (the interstitial is recognized
+  by its title), so it's treated as hostile by construction: that tab may
+  only reach public http(s) addresses, downloads are denied, new windows are
+  blocked, and the renderer's heap is capped.
 - **Concurrent workers, one shared browser** — a supervisor
   (`bin/crawler-manager.php`) runs several single-item worker processes at
   once, each opening its own isolated tab (separate cookies/storage) in one
@@ -85,9 +89,24 @@ and a small AJAX front end to search it.
   page charsets are taken from the BOM, the header, or a sniffed
   `<meta charset>`, in that order, so legacy pages don't index as mojibake.
 - **SSRF hardening** — a URL is only crawlable if its host has a real,
-  currently-delegated TLD (list fetched from IANA and refreshed weekly). This
-  alone rejects IP literals, `localhost`, and internal-only suffixes like
-  `.corp`/`.local`.
+  currently-delegated TLD (list fetched from IANA and refreshed weekly),
+  which rejects IP literals, `localhost`, and internal-only suffixes like
+  `.corp`/`.local` outright. Because a name is not an address, that isn't
+  taken as the answer: the host is resolved before the first request, and one
+  that points at a loopback, private, link-local (the cloud metadata endpoint
+  included), or otherwise reserved address is refused — as is a host that
+  resolves to a mix of public and private addresses, since it, not the
+  crawler, would pick which one got connected to. The same check runs again
+  on every redirect hop, on every host a sitemap redirects to, and on every
+  subresource a challenge page asks for; neither HTTP client follows a
+  redirect on its own.
+- **Hostile-input limits** — the site being crawled never gets to decide how
+  much work its page costs. Response bodies, decompressed sitemaps, DevTools
+  messages, robots.txt rules and wildcards, links taken off one page, and the
+  text read to describe each of them are all bounded; `pdftotext` runs under
+  a timeout; images are sized from their header before a pixel is decoded;
+  and a hostname longer than DNS permits is rejected rather than left for the
+  database to reject mid-crawl.
 - **Redirects** — followed with a hop cap and loop protection; a redirect onto
   an already-known URL is de-duplicated rather than stored twice.
 - **URL canonicalization** — forces HTTPS, strips tracking parameters
@@ -110,12 +129,28 @@ and a small AJAX front end to search it.
 ### Search
 
 - **FULLTEXT ranking** — `MATCH … AGAINST`, ranked first by how many distinct
-  *hosts* link to a result using matching anchor text (an external relevance
-  signal that ten links from one site can't inflate), then by direct content
-  relevance, then by how often the URL is linked at all. Retrieval is
-  two-stage — link ranking runs over a bounded pool of the top matches by
-  content relevance — so a broad query costs the same at millions of indexed
-  pages as at thousands.
+  *registrable domains* link to a result using matching anchor text (an
+  external relevance signal that ten links from one site can't inflate), then
+  by direct content relevance, then by how often the URL is linked at all.
+  Domains rather than hostnames, via the Public Suffix List: anyone who owns
+  one domain can point unlimited hostnames at it with a single wildcard DNS
+  record, so counting hostnames would make it free to manufacture as much
+  "independent" endorsement as you liked. Registering a domain is the step
+  that costs money, so that's the unit counted. Retrieval is two-stage — link
+  ranking runs over a bounded pool of the top matches by content relevance —
+  so a broad query costs the same at millions of indexed pages as at
+  thousands.
+- **Ranking integrity** — every ranking input is written by the page being
+  ranked, so each is bounded by what it costs to fake. A page's own domain
+  doesn't count toward its link signal (four out of five links in a real
+  crawl are a site linking itself, and self-endorsement isn't endorsement).
+  The `keywords` meta tag is not indexed — it's the one field no reader ever
+  sees, so nothing in it has to be true. The popularity counter counts
+  distinct linking *pages*, not mentions, so repeating a link or being
+  recrawled adds nothing. And because MariaDB's relevance is exactly linear
+  in term frequency — 500 repetitions really do score 500× — the number of
+  times one word counts toward a page's relevance is capped, at a level a
+  thorough honest page reaches anyway.
 - **Snippets** — each result shows the text around where the query actually
   matched, with the terms highlighted, rather than the first lines of a
   description that may not contain the match at all.
@@ -160,11 +195,16 @@ and a small AJAX front end to search it.
 - **`bin/backup.php`** — dumps the database and archives the thumbnails,
   timestamped, keeping the last seven runs.
 - **`bin/test.php`** — a dependency-free test suite over the pure logic (URL
-  parsing/resolution, robots.txt matching, HTML extraction, text handling).
+  parsing/resolution, robots.txt matching, HTML extraction, address
+  classification, public-suffix handling, text handling).
+- **`bin/refresh-lists.php`** — downloads the two published lists the project
+  depends on but doesn't own: IANA's root-zone TLD list and Mozilla's Public
+  Suffix List. Installed as a systemd timer that runs weekly, so neither the
+  crawler nor a search request ever has to stop and fetch one.
 - **`bin/install.php`** — an idempotent installer that checks requirements,
   writes `.env` (including hashing the login password), provisions the
   database and schema, and prints the manual (root-only) steps for the Apache
-  vhost and the crawler systemd service.
+  vhost, the crawler systemd service, and the weekly list-refresh timer.
 - **`bin/normalize-urls.php`** — re-normalizes stored URLs against the current
   canonicalization rules and merges the rows that turn out to be the same
   resource. Reports and changes nothing without `--apply`.
@@ -279,6 +319,8 @@ bin/install.php         installer / requirements checker
 bin/crawler.php         crawls one item, then exits
 bin/crawler-manager.php supervisor: owns the shared Chrome instance, runs
                         WORKER_COUNT concurrent workers
+bin/refresh-lists.php   weekly download of the IANA TLD and Public Suffix
+                        lists (systemd timer)
 bin/normalize-urls.php  re-normalizes and de-duplicates stored URLs
 bin/reextract-text.php  re-runs text extraction over stored page HTML
 bin/backup.php          timestamped DB dump + thumbnail archive, rotated

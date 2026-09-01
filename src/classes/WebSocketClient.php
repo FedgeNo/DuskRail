@@ -25,6 +25,15 @@ class WebSocketClient
     // reading it in frame-sized slices was a syscall per slice.
     private const READ_CHUNK_SIZE = 65536;
 
+    // The largest CDP message this will bring into memory. Chrome is the peer
+    // here, but what it hands over is decided by the site being crawled: a
+    // response with no Content-Length can't be sized up before
+    // Fetch.getResponseBody is asked for it, and the answer arrives
+    // base64-encoded in a single frame. Comfortably above a
+    // ChromeConnection::MAX_BODY_SIZE body once encoded (which grows by a
+    // third), so nothing this crawler would have kept is ever refused here.
+    private const MAX_MESSAGE_BYTES = 32 * 1024 * 1024;
+
     /** @var resource */
     private $socket;
 
@@ -161,6 +170,12 @@ class WebSocketClient
 
             $message .= $frame['payload'];
 
+            // Continuation frames are individually within the per-frame
+            // limit, so the whole message has to be measured as well.
+            if (strlen($message) > self::MAX_MESSAGE_BYTES) {
+                throw new \RuntimeException('CDP message exceeds ' . self::MAX_MESSAGE_BYTES . ' bytes');
+            }
+
             if ($frame['fin']) {
                 return $message;
             }
@@ -256,6 +271,15 @@ class WebSocketClient
             $length = unpack('J', $extended)[1];
         }
 
+        // Refused before a single byte of it is read, rather than after -
+        // the point is not to allocate it at all.
+        // Negative is not a size - it's a 64-bit length with the top bit set,
+        // which PHP reads back as a negative int and every size comparison
+        // below would wave straight through.
+        if ($length < 0 || $length > self::MAX_MESSAGE_BYTES) {
+            throw new \RuntimeException('CDP frame declares ' . $length . ' bytes, over the ' . self::MAX_MESSAGE_BYTES . '-byte limit');
+        }
+
         $maskKey = null;
 
         if ($masked) {
@@ -281,8 +305,8 @@ class WebSocketClient
 
     /**
      * Bytes already read past what a caller asked for. A CDP response and the
-     * events around it routinely arrive in one TCP segment, and reading
-     * exactly the requested count meant a stream_select() syscall per frame
+     * events around it routinely arrive in one TCP segment, so reading
+     * exactly the requested count costs a stream_select() syscall per frame
      * header, per length field, per payload - most of them returning
      * instantly from data already in userspace. Anything over-read is kept
      * here and served without touching the socket at all.

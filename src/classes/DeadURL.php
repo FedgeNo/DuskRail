@@ -113,6 +113,18 @@ DELETE FROM `DeadURLs`
         $expired = [];
         $cutoff = time() - self::MAX_AGE_SECONDS;
 
+        // DeadURLs.url is a utf8mb4_unicode_ci column, so IN () matches a URL
+        // recorded as "/Foo" when asked about "/foo" - but hands back the
+        // spelling it holds. Keyed by that spelling, the caller's own isset()
+        // misses and re-creates a URL already judged dead, which is the exact
+        // refetch loop this class exists to stop. Each answer is keyed by the
+        // string the caller asked with.
+        $requested = [];
+
+        foreach ($urls as $url) {
+            $requested[mb_strtolower($url)] = $url;
+        }
+
         foreach (array_chunk(array_unique($urls), self::LOOKUP_CHUNK_SIZE) as $chunk) {
             $placeholders = implode(', ', array_fill(0, count($chunk), '?'));
 
@@ -127,7 +139,7 @@ SELECT `deadURLId`, `url`, `deadTime`
 
             while ($row = mysqli_fetch_assoc($result)) {
                 if ((int) $row['deadTime'] >= $cutoff) {
-                    $dead[$row['url']] = true;
+                    $dead[$requested[mb_strtolower($row['url'])] ?? $row['url']] = true;
                 } else {
                     $expired[] = (int) $row['deadURLId'];
                 }

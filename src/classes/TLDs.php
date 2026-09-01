@@ -10,30 +10,21 @@ declare(strict_types=1);
  * schedule rather than bundled as a static file that would silently go
  * stale as ICANN delegates new TLDs over time.
  *
- * URL::isValid() uses this to require every crawled URL to have a real TLD -
- * this project's whole approach to SSRF hardening: no IP literal (IPv4 or
- * IPv6) has a real TLD as its last dot-separated label, so requiring one
- * rejects those along with single-label internal hostnames
+ * URL::isValid() uses this to require every crawled URL to have a real TLD.
+ * That rejects IP literals (no IPv4 or IPv6 literal has a real TLD as its
+ * last dot-separated label) along with single-label internal hostnames
  * ("http://fileserver/") and made-up internal-only suffixes
- * ("http://app.corp/", "http://db.local/") in one move, without needing a
- * separate, dedicated IP-literal check at all.
+ * ("http://app.corp/", "http://db.local/") in one move - though it is only
+ * the first half of this project's SSRF defence, since a perfectly ordinary
+ * TLD can still front a name pointed at a private address (see IPAddress).
+ *
+ * Refreshed by bin/refresh-lists.php on a weekly timer, never on demand from
+ * a crawl - see that script for why the schedule lives outside the crawler.
  */
 class TLDs
 {
     private const SOURCE_URL = 'https://data.iana.org/TLD/tlds-alpha-by-domain.txt';
     private const CACHE_FILE = ROOT_DIR . '/data/tlds.txt';
-    private const LOCK_FILE = ROOT_DIR . '/data/tlds.lock';
-
-    // IANA updates the real list only occasionally (a handful of times a
-    // year, almost always additions) - refetching weekly is comfortably more
-    // often than it actually changes, while keeping even a long-running
-    // crawler process from ever running on a badly stale copy.
-    private const MAX_AGE_SECONDS = 7 * 24 * 60 * 60;
-
-    // How long a failed refresh waits before anything tries again. Without
-    // it, a cache that's aged out while IANA is unreachable means every
-    // crawler worker, every run, spends its time on the same failing fetch.
-    private const RETRY_SECONDS = 60 * 60;
 
     private static ?array $tlds = null;
 
@@ -47,32 +38,26 @@ class TLDs
     }
 
     /**
-     * Fetches a fresh copy right now if the cache is missing/stale. Called
-     * directly by bin/install.php so a freshly cloned install has a working
-     * list before the first crawl ever runs, rather than only discovering
-     * the gap the first time URL::isValid() happens to need it.
+     * Fetches the current list and replaces the cache. Called by
+     * bin/refresh-lists.php on its weekly timer, and by bin/install.php so a
+     * freshly cloned install has a working list before the first crawl.
      */
-    public static function warm(): void
+    public static function refresh(): bool
     {
-        self::refreshIfStale();
-    }
+        $connection = new HTTPConnection(new URL(self::SOURCE_URL));
 
-    private static function loaded(): array
-    {
-        if (self::$tlds === null) {
-            self::refreshIfStale();
-            self::$tlds = self::readCache();
+        if ($connection -> statusCode !== 200) {
+            return false;
         }
 
-        return self::$tlds;
-    }
+        $body = $connection -> readBody();
 
-    private static function refreshIfStale(): void
-    {
-        $age = is_file(self::CACHE_FILE) ? time() - filemtime(self::CACHE_FILE) : PHP_INT_MAX;
-
-        if ($age < self::MAX_AGE_SECONDS) {
-            return;
+        // A truncated response or an error page would parse into a short list
+        // of nonsense that quietly makes most of the web uncrawlable. IANA's
+        // real file opens with a version comment and carries well over a
+        // thousand TLDs.
+        if (!str_starts_with($body, '#') || substr_count($body, chr(10)) < 100) {
+            return false;
         }
 
         $directory = dirname(self::CACHE_FILE);
@@ -81,63 +66,46 @@ class TLDs
             mkdir($directory, 0755, true);
         }
 
-        // Several crawler workers run at once and each hits this the moment
-        // the cache ages out, so without a lock they'd all fetch the same
-        // list from IANA simultaneously and then write over each other. The
-        // one that takes the lock does the work; the rest carry on with the
-        // cache they already have, which is at most a few minutes older than
-        // what's arriving.
-        $lock = fopen(self::LOCK_FILE, 'c');
+        // Written beside the real file and moved into place, so a reader in
+        // another process never sees a half-written list - rename() is atomic
+        // within a filesystem, file_put_contents() is not.
+        $temporary = self::CACHE_FILE . '.' . getmypid();
 
-        if ($lock === false) {
-            return;
+        if (file_put_contents($temporary, $body) === false) {
+            return false;
         }
 
-        if (!flock($lock, LOCK_EX | LOCK_NB)) {
-            fclose($lock);
+        rename($temporary, self::CACHE_FILE);
+        self::$tlds = null;
 
-            return;
-        }
+        return true;
+    }
 
-        try {
-            $connection = new HTTPConnection(new URL(self::SOURCE_URL));
+    public static function isCached(): bool
+    {
+        return is_file(self::CACHE_FILE);
+    }
 
-            if ($connection -> statusCode === null || $connection -> statusCode < 200 || $connection -> statusCode >= 300) {
-                // Fetch failed (network hiccup, IANA temporarily unreachable) -
-                // leave whatever cache already exists in place (however stale)
-                // rather than clearing it. readCache() falling back to an empty
-                // set would fail every single URL closed instead of just running
-                // on a slightly-older-than-a-week list a little longer.
-                //
-                // The existing file's mtime is pushed forward by RETRY_SECONDS'
-                // worth of shortfall all the same, so the next process along
-                // doesn't immediately try again and spend its own budget on the
-                // same unreachable host.
-                if (is_file(self::CACHE_FILE)) {
-                    touch(self::CACHE_FILE, time() - self::MAX_AGE_SECONDS + self::RETRY_SECONDS);
-                }
+    public static function cacheAgeSeconds(): ?int
+    {
+        return self::isCached() ? time() - (int) filemtime(self::CACHE_FILE) : null;
+    }
 
-                return;
-            }
-
-            // Written beside the real file and moved into place, so a reader
-            // in another process never sees a half-written list - rename() is
-            // atomic within a filesystem, file_put_contents() is not.
-            $temporary = self::CACHE_FILE . '.' . getmypid();
-
-            if (file_put_contents($temporary, $connection -> readBody()) !== false) {
-                rename($temporary, self::CACHE_FILE);
-            }
-        } finally {
-            flock($lock, LOCK_UN);
-            fclose($lock);
-        }
+    private static function loaded(): array
+    {
+        return self::$tlds ??= self::readCache();
     }
 
     private static function readCache(): array
     {
         if (!is_file(self::CACHE_FILE)) {
-            return [];
+            // Loud rather than empty: an empty set answers false for every
+            // TLD there is, so every URL fails validation and the crawler
+            // simply stops finding anything - a silent, near-unreadable
+            // failure for what is really just a missing file.
+            throw new \RuntimeException(
+                'No TLD list cached at ' . self::CACHE_FILE . ' - run bin/refresh-lists.php'
+            );
         }
 
         $tlds = [];

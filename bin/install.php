@@ -175,7 +175,7 @@ foreach (['mysqli', 'gd', 'mbstring', 'curl', 'dom'] as $extension) {
 
 // Soft requirement, not fail() - the crawler works fine without it, just
 // falls back to marking a JS-challenge page crawled without ever resolving
-// it (see HeadlessBrowser, CLAUDE.md's crawler conventions). CHROME_BINARY
+// it (see HeadlessBrowser, docs/architecture.md's crawler conventions). CHROME_BINARY
 // in .env overrides autodetection if none of these names match.
 $chrome_found = false;
 foreach (['chromium-browser', 'google-chrome', 'chromium', 'google-chrome-stable'] as $binary_name) {
@@ -592,7 +592,7 @@ CREATE TABLE `Hosts` (
             // on a large table that can take a while) would otherwise look
             // "already satisfied" on the next run from the column alone,
             // permanently skipping the rest of the backfill and the
-            // NOT NULL/FK at the end. Confirmed happening in practice.
+            // NOT NULL/FK at the end.
             'name' => 'add_hostid_to_items',
             'check' => fn () => column_exists('Items', 'hostId') && index_exists('Items', 'hostId_crawledTime'),
             'apply' => function (): void {
@@ -729,11 +729,11 @@ ALTER TABLE `Hosts`
             },
         ],
         [
-            // The focused-crawl topic used to be a file in the project
-            // directory, which meant the web server needed write access
-            // inside the checkout purely so a web request could hand a string
-            // to a CLI process - and that one requirement is what the whole
-            // ACL/SELinux setup existed to satisfy. Both sides already share
+            // Carries the focused-crawl topic between the web side and the
+            // crawler. A file in the project directory would need the web
+            // server to have write access inside the checkout purely to hand
+            // a string to a CLI process, and that one requirement is what
+            // drives the whole ACL/SELinux setup. Both sides already share
             // this database.
             'name' => 'create_settings_table',
             'check' => fn () => table_exists('Settings'),
@@ -887,6 +887,72 @@ ALTER TABLE `Items`
 ');
             },
         ],
+        [
+            // Search ranking counts how many distinct *domains* link to a
+            // result. Counting hostnames instead lets one registered domain
+            // with a wildcard DNS record mint them without limit -
+            // a.evil.com, b.evil.com, ... - each looking like another
+            // independent site endorsing whatever it points at. The
+            // registrable domain
+            // (PublicSuffixList) is the unit that costs money to add, so it's
+            // the unit worth counting; stored per host because no SQL
+            // expression can derive it (bbc.co.uk and theguardian.co.uk are
+            // two owners, a.evil.com and b.evil.com are one, and no amount of
+            // label counting tells them apart). Backfilled below, after the
+            // list itself is fetched. No index: it's read through a primary
+            // -key join and never looked up by.
+            'name' => 'add_domain_to_hosts',
+            'check' => fn () => column_exists('Hosts', 'domain'),
+            'apply' => function (): void {
+                run_sql('
+ALTER TABLE `Hosts`
+    ADD COLUMN `domain` varchar(255) NOT NULL DEFAULT \'\' AFTER `host`
+');
+            },
+        ],
+        [
+            // The meta keywords tag carried the same weight in relevance as
+            // the page's actual text. It is the one indexed field a page
+            // author writes purely for search engines: nobody reading the
+            // page ever sees it, so nothing about it has to be true, which is
+            // exactly why every major engine stopped counting it decades ago.
+            // The column stays (it costs nothing and is still worth showing);
+            // it just no longer votes on what a page is about.
+            'name' => 'drop_keywords_from_items_fulltext',
+            'check' => fn () => index_exists('Items', 'title_description_fullText'),
+            'apply' => function (): void {
+                run_sql('
+ALTER TABLE `Items`
+    DROP KEY `title_description_keywords_fullText`,
+    ADD FULLTEXT KEY `title_description_fullText` (`title`, `description`, `fullText`)
+');
+            },
+        ],
+        [
+            // Items.inc means "how many distinct pages link here". A row
+            // carrying a count of every mention instead reflects one page
+            // repeating a link and every recrawl of it - hundreds off a
+            // single link edge from a single domain, which as a ranking
+            // signal is one page voting for itself over and over. Recomputed
+            // from the Links table, which holds the honest answer.
+            //
+            // No `check` that can pass: there's nothing in the schema to
+            // detect, and re-running it is harmless because it derives the
+            // value rather than adjusting it. The Migrations record is what
+            // keeps it to once.
+            'name' => 'recount_items_inc_from_links',
+            'check' => fn () => false,
+            'apply' => function (): void {
+                run_sql('
+UPDATE `Items`
+    SET `inc` = (
+        SELECT COUNT(*)
+            FROM `Links`
+            WHERE `Links`.`childId` = `Items`.`itemId`
+    )
+');
+            },
+        ],
     ];
 }
 
@@ -937,17 +1003,68 @@ INSERT INTO `Migrations` (`name`)
     }
 }
 
-// ---------- TLD list ----------
+// ---------- Published lists ----------
 //
-// URL::isValid() requires a real, currently-delegated TLD (see TLDs) and
-// refuses to crawl anything without one - fetched here too, not just lazily
-// on first use, so a freshly cloned install can start crawling right away
-// instead of the very first URL::isValid() call silently failing everything
-// closed because no cache exists yet.
+// Neither list is bundled: URL::isValid() refuses to crawl anything without a
+// real TLD (TLDs), and search ranking can't tell one owner from another
+// without the Public Suffix List. Both are fetched here rather than left to
+// the weekly timer, so a freshly cloned install can crawl immediately instead
+// of failing every URL closed until the timer's first run.
 
-heading('Fetching TLD list');
-TLDs::warm();
+heading('Fetching published lists');
+
+if (!TLDs::refresh() && !TLDs::isCached()) {
+    fail('Couldn\'t fetch the IANA TLD list, and none is cached - nothing will be crawlable');
+}
+
 ok('TLD list ready');
+
+if (!PublicSuffixList::refresh() && !PublicSuffixList::isCached()) {
+    fail('Couldn\'t fetch the Public Suffix List, and none is cached - the crawler can\'t record host domains');
+}
+
+ok('Public Suffix List ready');
+
+// ---------- Host domains ----------
+//
+// Hosts.domain is derived from the list just fetched, so it's filled in here
+// rather than in the schema delta that added the column - no SQL expression
+// can compute it. Only rows that don't have one yet are touched, which makes
+// this both the backfill for an existing install and a no-op on every run
+// after the first.
+
+heading('Filling in host domains');
+
+$hosts_needing_domain = mysqli_query($connection, '
+SELECT `hostId`, `host`
+    FROM `Hosts`
+    WHERE `domain` = \'\'
+');
+
+$set_domain = mysqli_prepare($connection, '
+UPDATE `Hosts`
+    SET `domain` = ?
+    WHERE `hostId` = ?
+');
+$filled = 0;
+
+// One transaction around the lot. Committed row by row, each UPDATE is its
+// own flush to disk, which measured at roughly seventy rows a second - fine
+// for the few thousand hosts an early install has, hours for the millions
+// this index is built to reach.
+mysqli_begin_transaction($connection);
+
+while ($row = mysqli_fetch_assoc($hosts_needing_domain)) {
+    $domain = PublicSuffixList::registrableDomain($row['host']);
+    $hostId = (int) $row['hostId'];
+    mysqli_stmt_bind_param($set_domain, 'si', $domain, $hostId);
+    mysqli_stmt_execute($set_domain);
+    $filled++;
+}
+
+mysqli_commit($connection);
+
+ok($filled === 0 ? 'Every host already has its domain' : 'Filled in ' . $filled . ' host domain(s)');
 
 
 // ---------- Manual setup ----------
@@ -1019,7 +1136,8 @@ echo <<<SHELL
 sudo useradd --system --no-create-home --home-dir /var/lib/{$service_user} --shell /sbin/nologin {$service_user}
 
 # The three directories the crawler writes: thumbnails (served by the web
-# server, so it reads them too), the TLD cache, and its own run state. The
+# server, so it reads them too), the cached published lists (written by the
+# refresh timer, read by both services), and its own run state. The
 # checkout itself stays owned by whoever cloned it and is never writable by
 # either service - nothing in it needs to be. The default ACL (d:) is what
 # makes files the crawler creates later inherit the same access, rather than
@@ -1067,6 +1185,12 @@ SHELL;
 heading('Web server vhost (run manually, needs sudo)');
 echo <<<SHELL
 sudo tee /etc/httpd/conf.d/duskrail.conf > /dev/null <<'EOF'
+# Server-wide, deliberately outside the vhosts: the default Server header
+# names the exact Apache, OpenSSL and distribution build, which is a list of
+# which published CVEs to try. "Prod" reduces it to "Apache".
+ServerTokens Prod
+ServerSignature Off
+
 # Plain HTTP exists only to send everyone to HTTPS - the session and
 # rate-limit cookies are Secure-only, so a page served over HTTP wouldn't
 # work properly anyway.
@@ -1079,27 +1203,100 @@ sudo tee /etc/httpd/conf.d/duskrail.conf > /dev/null <<'EOF'
     ServerName {$site_host}
     DocumentRoot {$root}
 
+    # Nothing in the checkout is reachable unless it is named below.
+    #
+    # An allowlist, never a list of what to hide: such a list can only name
+    # what existed when it was written, leaving everything added afterwards
+    # public by default. That reaches as far as the .git directory - HEAD, the
+    # pack index and the packs themselves are all fetchable, and the complete
+    # source and its full history come back out with an off-the-shelf script.
+    # An allowlist cannot fail that way, because a file nobody has thought
+    # about is not served.
     <Directory {$root}>
-        AllowOverride All
+        # .htaccess is not used, and honouring it means every request walks
+        # the directory tree looking for one it will not find.
+        AllowOverride None
+        # -Indexes so a directory with nothing to serve says so rather than
+        # listing itself.
+        Options -Indexes -ExecCGI +FollowSymLinks
+        DirectoryIndex index.php
+
+        # Granted at directory level purely so a request for "/" gets as far
+        # as DirectoryIndex; the deny below is what decides things, and it is
+        # per file.
         Require all granted
+
+        # Every file in the checkout, at any depth, unless named below.
+        <FilesMatch "^.*\$">
+            Require all denied
+        </FilesMatch>
+
+        # The pages a visitor can actually be on.
+        <FilesMatch "^(index|login|logout|watch)\.php\$">
+            Require all granted
+        </FilesMatch>
+
+        # Their assets. Named individually rather than by extension, so a
+        # stylesheet or script that lands anywhere else in the checkout does
+        # not become public by virtue of its suffix.
+        <FilesMatch "^(search\.js|watch\.js|style\.css|bootstrap\.min\.css|favicon\.svg)\$">
+            Require all granted
+        </FilesMatch>
     </Directory>
 
-    # Nothing under these is ever a URL - the crawler's run state, the
-    # environment file, and the CLI entry points. Denied at the web server
-    # rather than relied on to be unreachable by convention.
-    <DirectoryMatch "{$root}/(var|bin|src)">
+    # Directories that hold no URLs at all, denied outright as well - so a
+    # file that one day shares a name with something public above (a src/
+    # index.php, say) still isn't served.
+    <DirectoryMatch "{$root}/(var|bin|src|tests|data|logs|backups)(/|\$)">
         Require all denied
     </DirectoryMatch>
 
-    <Files ".env">
+    # The JSON endpoints. Each one gates itself (public ones rate-limit,
+    # operator ones require a session); this only grants reaching them.
+    <Directory {$root}/api>
+        <FilesMatch "\.php\$">
+            Require all granted
+        </FilesMatch>
+    </Directory>
+
+    # Crawled image thumbnails, written by the crawler and read by the web
+    # server. Only the .jpg files it actually writes.
+    <Directory {$root}/thumbnails>
+        <FilesMatch "\.jpg\$">
+            Require all granted
+        </FilesMatch>
+    </Directory>
+
+    # Belt and braces over the deny-by-default above: no dot-directory or
+    # dot-file at any depth, whatever else may grant it. .git is the one that
+    # matters, .env the one that would matter most.
+    <DirectoryMatch "/\.">
         Require all denied
-    </Files>
+    </DirectoryMatch>
+
+    <FilesMatch "^\.">
+        Require all denied
+    </FilesMatch>
+
+    # The catch-all deny is matched against a request's last path component,
+    # and for "/" that component is empty - so without this the home page is
+    # refused before DirectoryIndex gets to name index.php. Location sections
+    # are merged after Files ones, and this matches the bare root URL and
+    # nothing else.
+    <LocationMatch "^/\$">
+        Require all granted
+    </LocationMatch>
 
     SSLEngine on
     SSLCertificateFile /etc/pki/tls/certs/duskrail-mkcert.pem
     SSLCertificateKeyFile /etc/pki/tls/private/duskrail-mkcert-key.pem
 
     Header always set Strict-Transport-Security "max-age=31536000"
+
+    # PHP announces its exact version in every response otherwise. Unset here
+    # rather than via expose_php in php.ini, which is shared with every other
+    # site on the machine.
+    Header always unset X-Powered-By
 
     ErrorLog /var/log/httpd/duskrail-ssl-error.log
     CustomLog /var/log/httpd/duskrail-ssl-access.log combined
@@ -1183,6 +1380,52 @@ sudo systemctl daemon-reload
 # Left disabled (no boot-start) and stopped on purpose - drive it by hand:
 #   sudo systemctl start duskrail-crawler
 #   sudo systemctl stop duskrail-crawler     # graceful: workers finish first
+
+SHELL;
+
+// ---------- List refresh service ----------
+
+heading('Weekly list refresh (run manually, needs sudo)');
+echo <<<SHELL
+# The two published lists this project depends on but doesn't own: IANA's
+# root-zone TLD list and Mozilla's Public Suffix List. This runs as its own
+# scheduled job rather than lazily inside the crawler, so that a list expiring
+# is never something a crawl has to stop and deal with mid-run.
+sudo tee /etc/systemd/system/duskrail-refresh-lists.service > /dev/null <<'EOF'
+[Unit]
+Description=DuskRail published-list refresh (IANA TLDs, Public Suffix List)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User={$service_user}
+Group={$service_user}
+WorkingDirectory={$root}
+ExecStart={$php_binary} {$root}/bin/refresh-lists.php
+EOF
+
+sudo tee /etc/systemd/system/duskrail-refresh-lists.timer > /dev/null <<'EOF'
+[Unit]
+Description=Refresh DuskRail's published lists weekly
+
+[Timer]
+OnCalendar=weekly
+# Run on the next boot if the machine was off when this was due - both lists
+# only matter for being current, so a skipped week is worth catching up on.
+Persistent=true
+# Neither publisher needs every installation in the world arriving at midnight
+# on the same Sunday.
+RandomizedDelaySec=1h
+
+[Install]
+WantedBy=timers.target
+EOF
+sudo systemctl daemon-reload
+
+# Enabled and started, unlike the crawler: this one is maintenance that should
+# just happen, and it costs two small downloads a week.
+sudo systemctl enable --now duskrail-refresh-lists.timer
 
 SHELL;
 

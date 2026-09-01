@@ -56,6 +56,23 @@ class ChromeProcess
         // fills; this trades a little speed for not dying.
         '--disable-dev-shm-usage',
         '--mute-audio',
+        // A page that renders for real (HeadlessBrowser::resolveChallenge())
+        // can open windows and tabs of its own. Nothing here would ever look
+        // at one, they're created inside this crawler's own browser context,
+        // and a page that opens them in a loop is a browser that grows until
+        // it dies - taking every concurrent worker's fetch with it.
+        '--block-new-web-contents',
+        // A ceiling on what one renderer's JS may allocate. The default is a
+        // share of the machine's RAM, which for a page whose only goal is to
+        // exhaust it is an invitation; past this the renderer for that one
+        // page dies and every other tab carries on.
+        '--js-flags=--max-old-space-size=512',
+        // Nothing signs in to anything, and on a headless box the platform
+        // keyring is either absent or blocks on a prompt nobody can answer.
+        '--password-store=basic',
+        '--use-mock-keychain',
+        // Restrict DevTools endpoint to localhost only to prevent external access
+        '--remote-debugging-address=127.0.0.1',
     ];
 
     // Chrome's cold start is normally a second or two, but a machine that's

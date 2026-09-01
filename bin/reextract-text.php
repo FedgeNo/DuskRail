@@ -76,7 +76,10 @@ foreach ($ids as $itemId) {
     $metadata = HTMLLoader::extractMetadata($document);
     HTMLLoader::removeStyleAndScriptTags($document);
     HTMLLoader::removeBoilerplateElements($document);
-    $bodyText = HTMLLoader::extractBodyText($document);
+    // Same cap Item::markCrawled() applies, so the comparison below is
+    // stored-form against stored-form rather than reporting every page with a
+    // repeated word as "extracts differently".
+    $bodyText = Text::capRepeatedTerms(HTMLLoader::extractBodyText($document));
 
     // A page with its own declared description keeps it; one whose stored
     // description was the old pipeline's body-text excerpt gets the new

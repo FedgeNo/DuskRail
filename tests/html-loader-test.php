@@ -100,3 +100,30 @@ assert_false('link description not glued to the heading', str_contains($linkDesc
 $alt = HTMLLoader::load('<html><body><img src="/x.jpg" alt="A chart of results"><p>After.</p></body></html>', null);
 HTMLLoader::inlineImageAltText($alt);
 assert_true('alt text inlined', str_contains(HTMLLoader::extractBodyText($alt), 'A chart of results'));
+
+// Link descriptions still come from the surrounding node, and siblings
+// sharing one parent all describe with that same text - the answer is
+// computed once and reused, which is what keeps a list of a thousand links
+// from re-walking its parent a thousand times.
+$shared = HTMLLoader::load('<html><body><p>Context here <a href="/one">One</a> and <a href="/two">Two</a></p></body></html>', null);
+HTMLLoader::separateBlockElements($shared);
+$sharedLinks = HTMLLoader::extractAnchorLinks($shared, $pageURL);
+assert_same('first sibling describes from its parent', 'Context here One and Two', $sharedLinks[0]['description']);
+assert_same('second sibling gets the same description', 'Context here One and Two', $sharedLinks[1]['description']);
+
+// A page's own markup must not decide how many links this crawler processes.
+$many = '<html><body>';
+
+for ($i = 0; $i < 10050; $i++) {
+    $many .= '<a href="/p' . $i . '">link</a>';
+}
+
+$many .= '</body></html>';
+assert_same('links per page are capped', 10000, count(HTMLLoader::extractAnchorLinks(HTMLLoader::load($many, null), $pageURL)));
+
+// Text far past the description budget is cut rather than carried whole -
+// the stored description is a few hundred characters either way.
+$huge = '<html><body><p>' . str_repeat('word ', 20000) . '<a href="/x">x</a></p></body></html>';
+$hugeDescription = HTMLLoader::extractAnchorLinks(HTMLLoader::load($huge, null), $pageURL)[0]['description'];
+assert_true('over-long description is bounded', mb_strlen($hugeDescription) <= 20000);
+assert_true('over-long description still has text', str_starts_with($hugeDescription, 'word word'));

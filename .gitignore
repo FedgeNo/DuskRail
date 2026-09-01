@@ -3,7 +3,6 @@
 !/thumbnails/.gitkeep
 /logs/
 /data/
-/.claude/
 /var/*
 !/var/.gitkeep
 /backups/

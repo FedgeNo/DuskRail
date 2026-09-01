@@ -30,6 +30,14 @@ assert_false('mailto: rejected', (new URL('mailto:a@example.com')) -> isValid())
 assert_false('empty href rejected', (new URL('')) -> isValid());
 assert_true('real host accepted', (new URL('https://example.com/')) -> isValid());
 
+// Hostname lengths. A host longer than the Hosts.host column is a "Data too
+// long" exception that kills the worker mid-crawl, on every retry - and any
+// page can print one, so it has to be refused as the invalid name it is.
+assert_false('over-long hostname rejected', (new URL('https://' . str_repeat('a', 250) . '.com/')) -> isValid());
+assert_false('over-long label rejected', (new URL('https://' . str_repeat('a', 64) . '.com/')) -> isValid());
+assert_false('empty label rejected', (new URL('https://example..com/')) -> isValid());
+assert_true('longest legal label accepted', (new URL('https://' . str_repeat('a', 63) . '.com/')) -> isValid());
+
 // OAuth trap detection.
 assert_true('oauth authorize URL flagged', (new URL('https://accounts.example.com/auth?client_id=1&redirect_uri=2&response_type=code')) -> isLikelyOAuthURL());
 assert_false('ordinary query not flagged', (new URL('https://example.com/?client_id=1')) -> isLikelyOAuthURL());

@@ -35,8 +35,19 @@ define('CRAWL_TOPIC_SETTING', 'crawlTopic');
 // can say "the crawler is running" without any way to see the process.
 define('CRAWLER_HEARTBEAT_SETTING', 'crawlerHeartbeatTime');
 
+// Everything is reported; where it's reported depends on who's looking. A CLI
+// run is an operator watching their own terminal, so it prints. A web request
+// is a stranger, and PHP's error text carries absolute filesystem paths, the
+// query that failed and the internals around it - a free map of the install
+// for anyone poking at it. Those go to the web server's error log instead,
+// where they're just as readable to whoever runs this and to nobody else.
+//
+// Keyed on the SAPI rather than a debug setting: there is no value of a
+// config flag that makes leaking this to the public web the right answer, so
+// there's no flag to set wrongly.
 error_reporting(E_ALL);
-ini_set('display_errors', '1');
+ini_set('display_errors', PHP_SAPI === 'cli' ? '1' : '0');
+ini_set('log_errors', '1');
 
 spl_autoload_register(function (string $class): void {
     $path = CLASSES_DIR . '/' . $class . '.php';

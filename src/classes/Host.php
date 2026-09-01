@@ -46,11 +46,10 @@ class Host
 
     // How much of a robots.txt is read at all. 500 KiB is the limit Google
     // documents and enforces, so a file bigger than this is already being
-    // parsed only this far by the crawlers site owners actually write for -
-    // and a real one confirmed the need for a limit here at all: linkedin.com
-    // serves a robots.txt past the 64 KiB the column used to hold, which
-    // killed the worker outright rather than storing anything. Cut on a line
-    // boundary, since half a rule is worse than no rule.
+    // parsed only this far by the crawlers site owners actually write for.
+    // Real sites do serve files this large - linkedin.com among them - and an
+    // oversized one has to be cut rather than stored whole or refused. Cut on
+    // a line boundary, since half a rule is worse than no rule.
     private const MAX_ROBOTS_TXT_BYTES = 500 * 1024;
 
     // Redirect hops followed while fetching robots.txt, matching what
@@ -71,6 +70,21 @@ class Host
     // statement with thousands of parameters.
     private const BATCH_CHUNK_SIZE = 200;
 
+    // How many Allow/Disallow rules are read out of one robots.txt. At
+    // MAX_ROBOTS_TXT_BYTES a file can declare tens of thousands of them, and
+    // isDisallowed() runs against every rule, once per URL discovered on a
+    // page - a cost the host being crawled gets to choose. Google documents
+    // parsing "at least" 500 KiB without promising to honor every rule in it;
+    // this many covers every real robots.txt by a wide margin.
+    private const MAX_ROBOTS_RULES = 1000;
+
+    // Wildcards allowed in one Allow/Disallow pattern before it stops being
+    // treated as a pattern at all (see patternToRegex()). A rule like
+    // "Disallow: /*a*a*a*a*a*a*a*a*a*b" compiles to a regex whose backtracking
+    // is exponential in the number of "*"s, and the path it runs against is
+    // also this host's to choose. No real rule needs more than a couple.
+    private const MAX_PATTERN_WILDCARDS = 8;
+
     // Pending counts are read once per host per process and then tracked
     // locally. Re-counting per discovered link would mean a COUNT(*) per
     // link on a page that can carry hundreds, to enforce a limit that only
@@ -79,6 +93,11 @@ class Host
 
     public ?int $hostId = null;
     public ?string $host = null;
+
+    // The registrable domain this host belongs to (PublicSuffixList) - stored
+    // rather than derived on read because search ranking counts distinct
+    // domains, and no SQL expression can work out where a host's suffix ends.
+    public ?string $domain = null;
     public ?string $robotsTxt = null;
     public ?int $robotsTxtFetched = null;
     public ?int $robotsTxtFetchedTime = null;
@@ -88,12 +107,21 @@ class Host
     public ?int $nextCrawlTime = null;
     public ?int $inc = null;
 
+    // The parsed form of robotsTxt, built on the first isDisallowed() call
+    // and kept for the rest of this object's life. Reparsing per call meant
+    // splitting and regex-compiling the whole file (up to
+    // MAX_ROBOTS_TXT_BYTES of it) once per URL found on a page - hundreds of
+    // times over, for a file that cannot change while the page is being
+    // processed.
+    private ?array $robotsRules = null;
+
     public static function fromRow(array $row): self
     {
         $host = new self();
 
         $host -> hostId = (int) $row['hostId'];
         $host -> host = $row['host'];
+        $host -> domain = $row['domain'] ?? null;
         $host -> robotsTxt = $row['robotsTxt'];
         $host -> robotsTxtFetched = (int) $row['robotsTxtFetched'];
         $host -> robotsTxtFetchedTime = $row['robotsTxtFetchedTime'] !== null ? (int) $row['robotsTxtFetchedTime'] : null;
@@ -108,24 +136,30 @@ class Host
 
     /**
      * Finds the existing Hosts row for a hostname or creates one - a single
-     * upsert (bumping inc, same proven trick as Item::findOrCreateByURL())
-     * to reliably get the row's id via mysqli_insert_id() either way, then a
-     * follow-up SELECT by that id. The extra SELECT (which
-     * Item::findOrCreateByURL() doesn't need) matters here specifically:
-     * callers need the *real* robotsTxt/crawledTime/nextCrawlTime for an
-     * already-existing host, not blank defaults - fetchRobotsTxtIfMissing()
-     * would otherwise refetch robots.txt on every single call.
+     * upsert whose duplicate branch bumps inc, which is what makes
+     * mysqli_insert_id() report the existing row either way, then a follow-up
+     * SELECT by that id. The extra SELECT (which Item::findOrCreateByURL()
+     * doesn't need) matters here specifically: callers need the *real*
+     * robotsTxt/crawledTime/nextCrawlTime for an already-existing host, not
+     * blank defaults - fetchRobotsTxtIfStale() would otherwise refetch
+     * robots.txt on every single call.
      */
     public static function findOrCreateByName(string $name): self
     {
         $connection = Database::connection();
 
+        // domain is written on the duplicate branch too, so a row created
+        // before the column existed (or before the suffix list knew about its
+        // TLD) heals itself the next time the host is seen, rather than
+        // staying empty until someone runs a backfill.
+        $domain = PublicSuffixList::registrableDomain($name);
+
         $insert = mysqli_prepare($connection, '
-INSERT INTO `Hosts` (`host`)
-    VALUES (?)
-    ON DUPLICATE KEY UPDATE `inc` = `inc` + 1
+INSERT INTO `Hosts` (`host`, `domain`)
+    VALUES (?, ?)
+    ON DUPLICATE KEY UPDATE `inc` = `inc` + 1, `domain` = VALUES(`domain`)
 ');
-        mysqli_stmt_bind_param($insert, 's', $name);
+        mysqli_stmt_bind_param($insert, 'ss', $name, $domain);
         mysqli_stmt_execute($insert);
 
         $hostId = (int) mysqli_insert_id($connection);
@@ -164,20 +198,21 @@ SELECT *
             // VALUES() feeds each row's own increment into the duplicate
             // branch, so one statement can bump different hosts by different
             // amounts.
-            $rows = implode(', ', array_fill(0, count($chunk), '(?, ?)'));
+            $rows = implode(', ', array_fill(0, count($chunk), '(?, ?, ?)'));
             $arguments = [];
             $types = '';
 
             foreach ($chunk as $name) {
                 $arguments[] = $name;
+                $arguments[] = PublicSuffixList::registrableDomain($name);
                 $arguments[] = $counts[$name];
-                $types .= 'si';
+                $types .= 'ssi';
             }
 
             $insert = mysqli_prepare($connection, '
-INSERT INTO `Hosts` (`host`, `inc`)
+INSERT INTO `Hosts` (`host`, `domain`, `inc`)
     VALUES ' . $rows . '
-    ON DUPLICATE KEY UPDATE `inc` = `inc` + VALUES(`inc`)
+    ON DUPLICATE KEY UPDATE `inc` = `inc` + VALUES(`inc`), `domain` = VALUES(`domain`)
 ');
             mysqli_stmt_bind_param($insert, $types, ...$arguments);
             mysqli_stmt_execute($insert);
@@ -413,6 +448,10 @@ UPDATE `Hosts`
 
         $this -> robotsTxtFetchedTime = time();
 
+        // The rules just changed hands - whatever was parsed from the
+        // previous copy describes a file this host no longer serves.
+        $this -> robotsRules = null;
+
         // Crawl-delay is parsed once here, when the file changes hands, and
         // stored as its own column - reserveById() needs it inside a single
         // atomic UPDATE, where re-parsing a text blob isn't an option.
@@ -523,6 +562,23 @@ SELECT COUNT(*) AS `pendingItems`
     }
 
     /**
+     * Whether this hostname actually points somewhere on the public internet.
+     *
+     * URL::isValid()'s TLD gate refuses an address written as an address, but
+     * a name is not an address: anyone who owns a domain can point a
+     * subdomain of it at 127.0.0.1, at 169.254.169.254, or at anything else
+     * inside the network this crawler runs on, publish a link to it, and wait
+     * for the crawler to make the request on their behalf. The name passes
+     * every check that only reads the URL string, because there is nothing
+     * wrong with the string. See IPAddress for what counts as an address
+     * worth refusing, and for how a name that resolves to nothing is read.
+     */
+    public function isPubliclyRoutable(): bool
+    {
+        return IPAddress::hostResolvesPublicly($this -> host);
+    }
+
+    /**
      * Cuts an oversized robots.txt back to MAX_ROBOTS_TXT_BYTES, at the last
      * complete line inside that budget - strlen/substr rather than the mb_
      * equivalents deliberately, since the limit is a byte budget (the
@@ -587,8 +643,17 @@ SELECT COUNT(*) AS `pendingItems`
         $winningType = 'allow';
         $winningLength = -1;
 
-        foreach (self::rulesForWildcardUserAgent($this -> robotsTxt) as $rule) {
-            if (!preg_match($rule['regex'], $path)) {
+        $this -> robotsRules ??= self::rulesForWildcardUserAgent($this -> robotsTxt);
+
+        foreach ($this -> robotsRules as $rule) {
+            $matched = preg_match($rule['regex'], $path);
+
+            // preg_match returns false, not 0, when PCRE gives up (its
+            // backtracking budget, on a pattern this host wrote). Reading
+            // that as "no match" is how a Disallow quietly stops applying, so
+            // only a definite 0 lets a rule go - an undecidable Disallow
+            // counts as one that matched.
+            if ($matched === 0 || ($matched === false && $rule['type'] === 'allow')) {
                 continue;
             }
 
@@ -615,12 +680,11 @@ SELECT COUNT(*) AS `pendingItems`
      *
      * User-agent grouping specifically does matter, unlike the rest of the
      * simplifications here (no User-agent-name matching beyond "*", no
-     * Sitemap/Crawl-delay handling) - confirmed breaking real crawling
-     * otherwise: a real site's only "Disallow: /" was scoped to
-     * "User-agent: ClaudeBot" (increasingly common - many sites block
-     * AI-training bots by name while leaving general search crawling alone),
-     * and ignoring which group it belonged to made every single path on that
-     * site look disallowed to this crawler too.
+     * Sitemap/Crawl-delay handling). Sites routinely scope their only
+     * "Disallow: /" to one named model-training crawler - increasingly
+     * common, blocking those by name while leaving general search crawling
+     * alone - and ignoring which group a rule belongs to makes every path on
+     * such a site look disallowed to this crawler too.
      *
      * @return list<array{type: 'allow'|'disallow', pattern: string, regex: string}>
      */
@@ -633,11 +697,11 @@ SELECT COUNT(*) AS `pendingItems`
         // User-agent line - not just Allow/Disallow specifically. A group
         // that's only ever had an "Allow: /" (no Disallow at all, e.g. a
         // Content-Signal block) still needs the next "User-agent:" line to
-        // start a fresh group rather than silently extending this one -
-        // confirmed happening for real: a file's "User-agent: *" block had
-        // only "Content-Signal:"/"Allow: /" lines, so without this a
-        // following "User-agent: ClaudeBot" merged into the same group as
-        // "*", making its "Disallow: /" apply to this crawler too.
+        // start a fresh group rather than silently extending this one. Real
+        // files do carry a "User-agent: *" block of only "Content-Signal:"/
+        // "Allow: /" lines, and without this the named-crawler group that
+        // follows merges into the same group as "*", making its
+        // "Disallow: /" apply to this crawler too.
         $seenDirectiveSinceLastUserAgent = false;
 
         foreach (preg_split('/\r\n|\r|\n/', $robotsTxt) as $line) {
@@ -679,6 +743,10 @@ SELECT COUNT(*) AS `pendingItems`
                 'pattern' => $match[2],
                 'regex' => self::patternToRegex($match[2]),
             ];
+
+            if (count($rules) >= self::MAX_ROBOTS_RULES) {
+                break;
+            }
         }
 
         return $rules;
@@ -690,11 +758,22 @@ SELECT COUNT(*) AS `pendingItems`
      * string prefix: "*" matches any run of characters, and a trailing "$"
      * anchors the match to the exact end of the path instead of allowing
      * anything (however not matched by a "*") after it.
+     *
+     * Past MAX_PATTERN_WILDCARDS the value stops being read as a pattern and
+     * only its literal prefix (everything before the first "*") is kept. That
+     * matches a superset of what the full pattern would have, which is the
+     * safe direction for a Disallow, and it removes the alternation that
+     * makes a hand-crafted rule cost seconds of backtracking per path tested.
      */
     private static function patternToRegex(string $pattern): string
     {
         $anchored = str_ends_with($pattern, '$');
         $body = $anchored ? substr($pattern, 0, -1) : $pattern;
+
+        if (substr_count($body, '*') > self::MAX_PATTERN_WILDCARDS) {
+            return '#^' . preg_quote(substr($body, 0, (int) strpos($body, '*')), '#') . '#';
+        }
+
         $escaped = str_replace('\*', '.*', preg_quote($body, '#'));
 
         return '#^' . $escaped . ($anchored ? '$' : '') . '#';

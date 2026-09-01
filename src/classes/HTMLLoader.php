@@ -18,9 +18,9 @@ class HTMLLoader
      * space-separated class list (or the whole id), never a substring of a
      * longer compound word - a raw substring check on "header" would also
      * match Bootstrap's "page-header" (a plain content-heading style class,
-     * confirmed on a real page - it was silently deleting the page's actual
-     * <h1>) and "nav" would match Drupal's "section-navigation" (a real
-     * content/layout section, not a menu). Real chrome elements almost
+     * whose removal takes the page's actual <h1> with it) and "nav" would
+     * match Drupal's "section-navigation" (a real content/layout section, not
+     * a menu). Real chrome elements almost
      * always carry one of these as a clean, standalone token, so this list
      * can afford to include bare, generic words like "nav"/"header" - it's
      * the exact-token matching that makes that safe, not the word choice.
@@ -52,6 +52,25 @@ class HTMLLoader
      * of those, "ad" sits between two letters, never at a boundary).
      */
     private const AD_WORD_BOUNDARY_PATTERN = '/\b(?:ad|ads)\b/i';
+
+    /**
+     * How many <a>/<img> tags are taken off a single page. Real pages that
+     * genuinely list thousands of links exist (index and category pages), so
+     * this sits far above them - it's here to stop one page's markup deciding
+     * how long this crawler spends on it, not to second-guess honest pages.
+     */
+    private const MAX_LINKS_PER_PAGE = 10000;
+
+    /**
+     * How much of a node's text is read when describing a link found inside
+     * it. A description is stored at a few hundred characters, so nothing is
+     * lost by stopping here - and without a stop, describing each of a page's
+     * links means walking that link's whole parent subtree, once per link.
+     * On the shape that actually provokes it (thousands of anchors sharing
+     * one parent, or nested one inside the next) that is quadratic in the
+     * size of the page, and a page is free to choose its own shape.
+     */
+    private const MAX_DESCRIPTION_SOURCE_LENGTH = 20000;
 
     public static function load(string $html, ?string $charset): \DOMDocument
     {
@@ -149,7 +168,7 @@ class HTMLLoader
             if ($cursor < strlen($head) && $head[$cursor] === '=') {
                 $cursor++;
 
-                while ($cursor < strlen($head) && in_array($head[$cursor], [' ', chr(9), '"', chr(39)], true)) {
+                while ($cursor < strlen($head) && in_array($head[$cursor], [' ', chr(9), '"', '\''], true)) {
                     $cursor++;
                 }
 
@@ -345,8 +364,13 @@ class HTMLLoader
     public static function extractImageLinks(\DOMDocument $document, URL $baseURL): array
     {
         $images = [];
+        $descriptions = [];
 
         foreach ($document -> getElementsByTagName('img') as $img) {
+            if (count($images) >= self::MAX_LINKS_PER_PAGE) {
+                break;
+            }
+
             $src = trim($img -> getAttribute('src'));
 
             if ($src === '') {
@@ -359,12 +383,9 @@ class HTMLLoader
                 continue;
             }
 
-            $parent = $img -> parentNode;
-            $description = $parent !== null ? self::normalizeWhitespace($parent -> textContent) : '';
-
             $images[] = [
                 'url' => $url,
-                'description' => $description,
+                'description' => self::describingText($img -> parentNode, $descriptions),
             ];
         }
 
@@ -387,8 +408,13 @@ class HTMLLoader
     public static function extractAnchorLinks(\DOMDocument $document, URL $baseURL): array
     {
         $links = [];
+        $descriptions = [];
 
         foreach ($document -> getElementsByTagName('a') as $anchor) {
+            if (count($links) >= self::MAX_LINKS_PER_PAGE) {
+                break;
+            }
+
             $href = trim($anchor -> getAttribute('href'));
 
             if ($href === '') {
@@ -411,16 +437,68 @@ class HTMLLoader
                 continue;
             }
 
-            $parent = $anchor -> parentNode;
-            $description = $parent !== null ? self::normalizeWhitespace($parent -> textContent) : '';
-
             $links[] = [
                 'url' => $url,
-                'description' => $description,
+                'description' => self::describingText($anchor -> parentNode, $descriptions),
             ];
         }
 
         return $links;
+    }
+
+    /**
+     * The text describing a link, from the node it sits in - normalized, cut
+     * to MAX_DESCRIPTION_SOURCE_LENGTH, and remembered in $cache for the rest
+     * of the page. The cache is what makes the ordinary case cheap: a list of
+     * a thousand links shares one parent, and that parent's text is the same
+     * answer a thousand times over.
+     */
+    private static function describingText(?\DOMNode $node, array &$cache): string
+    {
+        if ($node === null) {
+            return '';
+        }
+
+        $key = spl_object_id($node);
+
+        if (!isset($cache[$key])) {
+            $cache[$key] = self::normalizeWhitespace(self::textUpTo($node, self::MAX_DESCRIPTION_SOURCE_LENGTH));
+        }
+
+        return $cache[$key];
+    }
+
+    /**
+     * $node's text content, given up on once $maxLength characters are in
+     * hand. textContent has no such stop - it builds the whole subtree's text
+     * however large that is, which is the entire page when the node is the
+     * body.
+     *
+     * Whole text nodes are appended and only the final result is cut, so what
+     * comes back is always valid UTF-8 rather than a string ending in half a
+     * character.
+     */
+    private static function textUpTo(\DOMNode $node, int $maxLength): string
+    {
+        $text = '';
+        $stack = [$node];
+
+        while ($stack !== [] && strlen($text) < $maxLength) {
+            $current = array_pop($stack);
+
+            if ($current -> nodeType === XML_TEXT_NODE || $current -> nodeType === XML_CDATA_SECTION_NODE) {
+                $text .= $current -> nodeValue;
+                continue;
+            }
+
+            // Pushed last child first, so popping walks the children in
+            // document order rather than backwards.
+            for ($child = $current -> lastChild; $child !== null; $child = $child -> previousSibling) {
+                $stack[] = $child;
+            }
+        }
+
+        return mb_substr($text, 0, $maxLength);
     }
 
     /**
@@ -503,8 +581,8 @@ class HTMLLoader
         $id = $element -> getAttribute('id');
 
         // class is a space-separated multi-value list, matched token-exact -
-        // that's what protects "page-header"/"section-navigation" (real
-        // content, confirmed on a real page) from a bare "header"/"nav".
+        // that's what protects "page-header"/"section-navigation", both real
+        // content, from a bare "header"/"nav".
         $classTokens = preg_split('/\s+/', strtolower($class), -1, PREG_SPLIT_NO_EMPTY);
 
         foreach (self::BOILERPLATE_CLASS_TOKENS as $token) {

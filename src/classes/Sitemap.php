@@ -24,6 +24,13 @@ class Sitemap
     private const MAX_FETCHES = 3;
     private const MAX_URLS = 500;
 
+    // How much a gzipped sitemap is allowed to become. gzip reaches ratios
+    // in the thousands on repetitive input, so a small, perfectly ordinary
+    // -looking download can expand into more memory than the machine has -
+    // and a sitemap is a file the host being crawled writes. Matches the cap
+    // on an uncompressed body, since that's what this is one of.
+    private const MAX_DECOMPRESSED_BYTES = 20 * 1024 * 1024;
+
     /**
      * Reads the sitemaps $robotsTxt declares and queues what they list.
      * Returns how many URLs were newly queued.
@@ -42,6 +49,22 @@ class Sitemap
             $body = $connection -> readBody();
             $host -> recordCrawl($connection -> statusCode !== null && in_array($connection -> statusCode, [429, 503], true));
 
+            // HTTPConnection doesn't follow redirects, so a moved sitemap is
+            // followed here instead, where the target can be held to the same
+            // same-host rule its <loc> entries are. Left to cURL, a redirect
+            // would be the one part of this whole path that could point
+            // anywhere at all - including back at this machine.
+            if ($connection -> statusCode !== null && $connection -> statusCode >= 300 && $connection -> statusCode < 400) {
+                $location = $connection -> headers['location'] ?? null;
+                $target = $location !== null ? $sitemapURL -> resolve(new URL($location)) : null;
+
+                if ($target !== null && $target -> isValid() && $target -> host === $host -> host) {
+                    $pending[] = $target;
+                }
+
+                continue;
+            }
+
             if ($connection -> statusCode === null || $connection -> statusCode < 200 || $connection -> statusCode >= 300) {
                 continue;
             }
@@ -50,7 +73,7 @@ class Sitemap
             // that's compression of the file itself, not transport encoding,
             // so curl hands the compressed bytes through untouched.
             if (str_starts_with($body, chr(0x1F) . chr(0x8B))) {
-                $decoded = @gzdecode($body);
+                $decoded = @gzdecode($body, self::MAX_DECOMPRESSED_BYTES);
                 $body = $decoded !== false ? $decoded : '';
             }
 
