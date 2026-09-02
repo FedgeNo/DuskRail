@@ -42,7 +42,7 @@ CREATE TABLE `Items` (
   PRIMARY KEY (`itemId`),
   UNIQUE KEY `url` (`url`),
   KEY `hostId_crawledTime_claimedUntil` (`hostId`,`crawledTime`,`claimedUntil`),
-  KEY `crawledTime_itemId_type` (`crawledTime`,`itemId`,`type`),
+  KEY `crawledTime_itemId_type_noindex` (`crawledTime`,`itemId`,`type`,`noindex`),
   KEY `recrawlDueTime_claimedUntil_hostId` (`recrawlDueTime`,`claimedUntil`,`hostId`),
   FULLTEXT KEY `title_description_fullText` (`title`,`description`,`fullText`),
   CONSTRAINT `Items_ibfk_1` FOREIGN KEY (`hostId`) REFERENCES `Hosts` (`hostId`)

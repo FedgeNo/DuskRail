@@ -995,6 +995,21 @@ ALTER TABLE `Items`
             },
         ],
         [
+            // The cached crawl summary reads crawledTime, type and noindex
+            // across the catalogue. Keeping all three in the crawl-feed
+            // index lets that once-per-minute scan stay off clustered rows
+            // without changing the feed's ordered prefix.
+            'name' => 'cover_crawl_statistics_index',
+            'check' => fn () => index_exists('Items', 'crawledTime_itemId_type_noindex'),
+            'apply' => function (): void {
+                run_sql('
+ALTER TABLE `Items`
+    DROP KEY `crawledTime_itemId_type`,
+    ADD KEY `crawledTime_itemId_type_noindex` (`crawledTime`, `itemId`, `type`, `noindex`)
+');
+            },
+        ],
+        [
             // The meta keywords tag carried the same weight in relevance as
             // the page's actual text. It is the one indexed field a page
             // author writes purely for search engines: nobody reading the

@@ -14,6 +14,7 @@
     var MAX_FEED_ITEMS = 50;
     var POLL_INTERVAL_MS = 1000;
     var STATUS_POLL_INTERVAL_MS = 5000;
+    var STATISTICS_POLL_INTERVAL_MS = 5000;
 
     // How close to the bottom still counts as following the feed. About one
     // row, so sitting on the last item keeps you following it, while
@@ -160,6 +161,45 @@
             });
     }
 
+    function format_count(value) {
+        return new Intl.NumberFormat().format(value);
+    }
+
+    function format_bytes(value) {
+        var units = ['B', 'KB', 'MB', 'GB', 'TB'];
+        var unit_index = 0;
+
+        while (value >= 1024 && unit_index < units.length - 1) {
+            value /= 1024;
+            unit_index++;
+        }
+
+        return value.toFixed(unit_index === 0 ? 0 : 1) + ' ' + units[unit_index];
+    }
+
+    function set_statistic(id, value) {
+        document.getElementById('stat-' + id).textContent = value;
+    }
+
+    function poll_statistics() {
+        fetch('/api/admin-statistics.php')
+            .then(function (response) { return response.json(); })
+            .then(function (statistics) {
+                ['found', 'indexed', 'searchable', 'queued', 'pages', 'images', 'hosts', 'dead'].forEach(function (name) {
+                    set_statistic(name, format_count(statistics[name]));
+                });
+
+                set_statistic('disk-free', format_bytes(statistics.diskFreeBytes));
+                set_statistic('disk-used', Math.round((1 - statistics.diskFreeBytes / statistics.diskTotalBytes) * 100) + '%');
+                set_statistic('memory', format_bytes(statistics.memoryUsedBytes) + ' / ' + format_bytes(statistics.memoryTotalBytes));
+                set_statistic('cpu-load', statistics.cpuLoad.toFixed(2) + ' / ' + statistics.cpuCount);
+            })
+            .catch(function () {})
+            .finally(function () {
+                setTimeout(poll_statistics, STATISTICS_POLL_INTERVAL_MS);
+            });
+    }
+
     function addSeed() {
         var input = document.getElementById('seed-input');
         var url = input.value.trim();
@@ -288,4 +328,5 @@
 
     poll();
     pollStatus();
+    poll_statistics();
 })();

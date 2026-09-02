@@ -254,6 +254,27 @@ input:focus-visible,
     z-index: 10;
     background: #000;
 }
+.CrawlStatisticsTable {
+    width: 100%;
+    table-layout: fixed;
+    border-collapse: collapse;
+    font-size: 0.8rem;
+    font-variant-numeric: tabular-nums;
+}
+.CrawlStatisticsTable th,
+.CrawlStatisticsTable td {
+    padding: 0.2rem 0.35rem;
+    white-space: nowrap;
+    text-align: center;
+}
+.CrawlStatisticsTable th {
+    color: #adb5bd;
+    font-weight: 500;
+}
+.CrawlStatisticsTable td {
+    color: #f8f9fa;
+    border-bottom: 1px solid #343a40;
+}
 .CrawlerStatus {
     font-size: 0.9rem;
     color: #adb5bd;

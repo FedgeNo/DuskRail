@@ -15,6 +15,8 @@ $page = Page::create('Watching the Crawl');
 $controls = new Div();
 $controls -> class = 'WatchControls';
 
+$controls -> addContent(new CrawlStatisticsTable());
+
 // Says running/stopped and the last hour's throughput - filled in by
 // watch.js from api/crawler-status.php, since only the crawler manager's
 // heartbeat knows, and it changes while the page is open.

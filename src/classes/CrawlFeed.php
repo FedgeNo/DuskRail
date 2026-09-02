@@ -53,10 +53,11 @@ class CrawlFeed
      * appends them in its usual top-to-bottom order and derives its next
      * cursor from the last one exactly as it always does.
      *
-     * Ordered by crawledTime alone, exactly the crawledTime_itemId_type index
-     * read backwards. Rows sharing the seed's boundary second that the
-     * arbitrary tie order left out arrive on the first forward poll (its
-     * cursor is inclusive) and the client's seen-set drops the repeats, so a
+     * Ordered by crawledTime alone, exactly the
+     * crawledTime_itemId_type_noindex index read backwards. Rows sharing the
+     * seed's boundary second that the arbitrary tie order left out arrive on
+     * the first forward poll (its cursor is inclusive) and the client's
+     * seen-set drops the repeats, so a
      * tiebreak here buys nothing the polling protocol doesn't already
      * guarantee.
      */
