@@ -49,7 +49,7 @@ class HTTPConnection
     {
         $this -> easyHandle = curl_init();
 
-        curl_setopt_array($this -> easyHandle, [
+        $options = [
             CURLOPT_URL => $url -> toString(),
             CURLOPT_PORT => $url -> port,
             CURLOPT_HTTPGET => true,
@@ -64,8 +64,6 @@ class HTTPConnection
             // following back on can only ever be redirected to the two
             // schemes this project fetches, never to a file:// or any other
             // protocol this build of curl happens to support.
-            CURLOPT_PROTOCOLS_STR => 'http,https',
-            CURLOPT_REDIR_PROTOCOLS_STR => 'http,https',
             CURLOPT_CONNECTTIMEOUT => 10,
             // A connect timeout alone only covers getting the connection open
             // - a server that accepts it and then sends nothing would hold
@@ -108,7 +106,17 @@ class HTTPConnection
 
                 return strlen($chunk);
             },
-        ]);
+        ];
+
+        if (defined('CURLOPT_PROTOCOLS_STR')) {
+            $options[CURLOPT_PROTOCOLS_STR] = 'http,https';
+            $options[CURLOPT_REDIR_PROTOCOLS_STR] = 'http,https';
+        } else {
+            $options[CURLOPT_PROTOCOLS] = CURLPROTO_HTTP | CURLPROTO_HTTPS;
+            $options[CURLOPT_REDIR_PROTOCOLS] = CURLPROTO_HTTP | CURLPROTO_HTTPS;
+        }
+
+        curl_setopt_array($this -> easyHandle, $options);
 
         $this -> multiHandle = curl_multi_init();
         curl_multi_add_handle($this -> multiHandle, $this -> easyHandle);
