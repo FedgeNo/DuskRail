@@ -31,9 +31,22 @@ class MainNavigation extends HTMLObject
             $watch -> class = 'NavLink';
             $container -> addContent($watch);
 
-            $signOut = new Anchor(ServerURL::absolute('/logout.php'), 'Sign Out');
-            $signOut -> class = 'NavLink';
-            $container -> addContent($signOut);
+            $signOutForm = new Form();
+            $signOutForm -> action = ServerURL::absolute('/logout.php');
+            $signOutForm -> method = 'post';
+            $signOutForm -> class = 'NavLogoutForm';
+
+            $csrf = new Input();
+            $csrf -> type = 'hidden';
+            $csrf -> name = '_csrf';
+            $csrf -> value = Auth::csrfToken();
+            $signOutForm -> addContent($csrf);
+
+            $signOut = new Button('Sign Out');
+            $signOut -> type = 'submit';
+            $signOut -> class = 'NavLink NavLogoutButton';
+            $signOutForm -> addContent($signOut);
+            $container -> addContent($signOutForm);
         } else {
             $signIn = new Anchor(ServerURL::absolute('/login.php'), 'Sign In');
             $signIn -> class = 'NavLink';

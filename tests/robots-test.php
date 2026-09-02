@@ -17,6 +17,17 @@ function robots_test_host(string $robotsTxt): Host
 
 $nl = chr(10);
 
+$redirectHost = new Host();
+$redirectHost -> host = 'example.com';
+assert_true(
+    'same-host robots redirect allowed',
+    $redirectHost -> allowsRobotsRedirect(new URL('https://example.com/canonical-robots.txt'))
+);
+assert_false(
+    'cross-host robots redirect refused',
+    $redirectHost -> allowsRobotsRedirect(new URL('https://static.example.com/robots.txt'))
+);
+
 // Unknown rules fail closed.
 $unknown = new Host();
 $unknown -> robotsTxtFetched = 0;

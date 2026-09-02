@@ -24,4 +24,19 @@ class Database
 
         return self::$connection;
     }
+
+    /**
+     * Installer-only connection injection: schema migrations run through the
+     * administrator identity supplied for that invocation, never through the
+     * permanently configured least-privilege runtime account.
+     */
+    public static function useConnection(\mysqli $connection): void
+    {
+        if (self::$connection !== null && self::$connection !== $connection) {
+            mysqli_close(self::$connection);
+        }
+
+        self::$connection = $connection;
+        mysqli_set_charset(self::$connection, 'utf8mb4');
+    }
 }

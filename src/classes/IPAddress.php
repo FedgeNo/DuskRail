@@ -64,34 +64,39 @@ class IPAddress
     }
 
     /**
-     * Whether every address $hostname resolves to, IPv4 and IPv6 alike, is
-     * publicly routable. One private answer is enough to refuse the whole
-     * name: a host publishing both a public A record and a private AAAA gets
-     * to decide which of them a browser actually connects to, so "some of
-     * them are fine" is not an answer worth acting on.
+     * Every address $hostname resolves to, but only when the complete answer
+     * set is non-empty and publicly routable. One private answer refuses the
+     * whole name: a host publishing both a public A and a private AAAA gets to
+     * choose which one an ordinary client reaches, so callers must never pick
+     * from a mixed set.
      *
-     * A name with no records at all answers true. There's nothing here to
-     * object to - the connection simply fails, which callers already treat as
-     * the host being unreachable rather than as anything about the URL.
+     * The returned addresses are the security decision, not merely evidence
+     * for a later Boolean check. HTTPConnection pins them with CURLOPT_RESOLVE
+     * and Chromium connects through OutboundProxy, which opens its socket to
+     * one of these exact addresses. DNS is therefore not asked a second time
+     * between validation and connection.
      *
-     * Answers are kept for the life of the process: these are short-lived CLI
-     * workers, and re-asking the resolver for the same name mid-crawl only
-     * widens the window where the answer that was checked and the address
-     * that gets connected to are different ones.
+     * @return list<string> Empty when resolution failed or any answer is not
+     * publicly routable.
      */
-    public static function hostResolvesPublicly(string $hostname): bool
+    public static function publicAddressesFor(string $hostname): array
     {
         static $answers = [];
 
-        if (!isset($answers[$hostname])) {
-            $answers[$hostname] = self::everyResolvedAddressIsPublic($hostname);
+        $hostname = strtolower(trim($hostname, '.'));
+
+        if ($hostname === '') {
+            return [];
         }
 
-        return $answers[$hostname];
-    }
+        if (filter_var($hostname, FILTER_VALIDATE_IP) !== false) {
+            return self::isPubliclyRoutable($hostname) ? [$hostname] : [];
+        }
 
-    private static function everyResolvedAddressIsPublic(string $hostname): bool
-    {
+        if (array_key_exists($hostname, $answers)) {
+            return $answers[$hostname];
+        }
+
         $addresses = @gethostbynamel($hostname) ?: [];
 
         foreach (@dns_get_record($hostname, DNS_AAAA) ?: [] as $record) {
@@ -100,13 +105,24 @@ class IPAddress
             }
         }
 
+        $addresses = array_values(array_unique(array_map('strtolower', $addresses)));
+
+        if ($addresses === []) {
+            return $answers[$hostname] = [];
+        }
+
         foreach ($addresses as $address) {
             if (!self::isPubliclyRoutable($address)) {
-                return false;
+                return $answers[$hostname] = [];
             }
         }
 
-        return true;
+        return $answers[$hostname] = $addresses;
+    }
+
+    public static function hostResolvesPublicly(string $hostname): bool
+    {
+        return self::publicAddressesFor($hostname) !== [];
     }
 
     /**

@@ -422,7 +422,12 @@ UPDATE `Hosts`
 
             $url = $url -> resolve(new URL($location));
 
-            if (!$url -> isValid()) {
+            // robots.txt is policy for this exact host. Following it onto a
+            // different host lets the first site choose an unrelated machine
+            // for this crawler to contact, bypassing that destination's own
+            // reservation and address gate. Canonical same-host redirects are
+            // still accepted; cross-host ones fail closed.
+            if (!$this -> allowsRobotsRedirect($url)) {
                 break;
             }
         }
@@ -605,6 +610,12 @@ SELECT COUNT(*) AS `pendingItems`
         $age = time() - $this -> robotsTxtFetchedTime;
 
         return $age >= ($this -> isRobotsTxtKnown() ? self::ROBOTS_TXT_MAX_AGE_SECONDS : self::ROBOTS_TXT_RETRY_SECONDS);
+    }
+
+    /** Same-host-only robots redirect policy, exposed for regression tests. */
+    public function allowsRobotsRedirect(URL $target): bool
+    {
+        return $target -> isValid() && $target -> host === $this -> host;
     }
 
     /**

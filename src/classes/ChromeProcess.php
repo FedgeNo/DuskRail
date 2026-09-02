@@ -100,7 +100,7 @@ class ChromeProcess
 
     public readonly string $hostAndPort;
 
-    public function __construct()
+    public function __construct(string $proxyHostAndPort)
     {
         $binary = self::findBinary();
 
@@ -116,6 +116,13 @@ class ChromeProcess
             [$binary],
             self::LAUNCH_FLAGS,
             [
+                '--proxy-server=socks5://' . $proxyHostAndPort,
+                // Make Chromium hand destination names to the SOCKS proxy.
+                // A direct DNS answer must never be available as a fallback,
+                // and even loopback destinations go through the proxy's
+                // public-address policy rather than Chrome's implicit bypass.
+                '--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE 127.0.0.1',
+                '--proxy-bypass-list=<-loopback>',
                 '--remote-debugging-port=0',
                 '--user-data-dir=' . $this -> userDataDir,
                 'about:blank',

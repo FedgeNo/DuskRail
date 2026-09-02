@@ -7,7 +7,7 @@ return [
     'port' => (int) Env::get('DB_PORT', '3306'),
     'database' => Env::get('DB_DATABASE', 'duskrail'),
     'username' => Env::get('DB_USERNAME', 'duskrail'),
-    'password' => Env::get('DB_PASSWORD', 'change-me'),
+    'password' => Env::get('DB_PASSWORD', ''),
     'siteURL' => Env::get('SITE_URL', 'https://duskrail.localhost'),
     'siteTitle' => Env::get('SITE_TITLE', 'DuskRail'),
     // password_hash() output for the single operator login (see Auth) - what

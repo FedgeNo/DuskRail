@@ -31,6 +31,14 @@ body {
 .NavLink:focus-visible {
     color: #7fbf7f;
 }
+.NavLogoutForm {
+    margin: 0;
+}
+.NavLogoutButton {
+    padding: 0;
+    border: 0;
+    background: transparent;
+}
 
 /* Anything focused by keyboard gets a visible ring. Several things here are
    focusable without being native controls (the image tiles are divs with
