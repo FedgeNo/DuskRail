@@ -42,16 +42,6 @@ class ContentType
         return str_starts_with($this -> type, 'image/');
     }
 
-    /**
-     * SVG is an image as far as a page is concerned, but it's markup rather
-     * than a bitmap - nothing that decodes images can read it, so it takes a
-     * different path through the crawler (see SVGRasterizer).
-     */
-    public function isSVG(): bool
-    {
-        return $this -> type === 'image/svg+xml' || $this -> type === 'image/svg';
-    }
-
     public function isPDF(): bool
     {
         return $this -> type === 'application/pdf';

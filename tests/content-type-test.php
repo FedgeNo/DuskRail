@@ -12,8 +12,6 @@ assert_false('json is not HTML', (new ContentType('application/json')) -> isHTML
 
 assert_true('jpeg is an image', (new ContentType('image/jpeg')) -> isImage());
 assert_true('svg is an image', (new ContentType('image/svg+xml')) -> isImage());
-assert_true('svg is SVG', (new ContentType('image/svg+xml')) -> isSVG());
-assert_false('png is not SVG', (new ContentType('image/png')) -> isSVG());
 
 assert_true('pdf detected', (new ContentType('application/pdf')) -> isPDF());
 assert_true('plain text detected', (new ContentType('text/plain; charset=utf-8')) -> isPlainText());

@@ -15,6 +15,7 @@ return [
     'siteURL' => Env::get('SITE_URL', 'https://duskrail.localhost'),
     'siteTitle' => Env::get('SITE_TITLE', 'DuskRail'),
     'thumbnailDirectory' => Env::get('THUMBNAIL_DIRECTORY', ROOT_DIR . '/thumbnails'),
+    'thumbnailMinimumFreeBytes' => Env::get('THUMBNAIL_MINIMUM_FREE_BYTES', '1.5T'),
     // password_hash() output for the single operator login (see Auth) - what
     // the crawl controls sit behind, not search. Deliberately no default: an
     // empty hash means "nobody can sign in", which is the only safe way for an

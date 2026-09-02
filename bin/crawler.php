@@ -437,36 +437,14 @@ $contentType = $connection -> contentType();
 $headerDirectives = header_robots_directives($connection -> headers['x-robots-tag'] ?? null);
 
 if ($contentType !== null && $contentType -> isImage()) {
-    $imageData = $connection -> readBody();
-
-    // SVG has no GD decoder at all, so it goes through the shared browser to
-    // be rendered into one this crawler can actually thumbnail - it's real
-    // page content (diagrams, logos, charts), not the broken-image case the
-    // rest of this branch is about.
-    $image = $contentType -> isSVG()
-        ? ImageLoader::loadSVG($imageData, $item -> itemId, $chromeEndpoint)
-        : ImageLoader::load($imageData, $item -> itemId);
-
-    if ($image === null) {
-        // Content-Type claimed image/*, but nothing usable came out - either
-        // it wasn't decodable at all (a corrupt file, a format GD doesn't
-        // support, an SVG the browser wouldn't render) or its dimensions
-        // ruled it out (a decompression bomb, or too small to be more than a
-        // tracking pixel/spacer/decorative icon). Either way there's nothing
-        // to keep, same reasoning as deleting an unrecoverable redirect.
-        $item -> delete('image-unusable');
-        echo 'Couldn\'t use image (undecodable or unusable dimensions), deleted this item.
-';
-        exit(0);
-    }
-
-    // Keep whatever title/description/keywords this item already had (e.g.
-    // the parent-node text captured when it was first discovered as a link)
-    // rather than wiping them out - an image has no metadata of its own to
-    // extract that would replace them, real or otherwise.
+    // The crawl records that this URL answered as an image and moves on.
+    // ThumbnailCache fetches, validates, resizes, and optionally stores it
+    // only when a reader first asks for the thumbnail. A recrawl invalidates
+    // an older cached rendering so that request sees the current resource.
+    ImageLoader::deleteThumbnail($item -> itemId);
     $item -> markCrawled($contentType -> type, $item -> title, $item -> description, $item -> keywords, null, null, $headerDirectives['noindex'] ? 1 : 0);
 
-    echo 'Saved thumbnail, marked crawled.
+    echo 'Marked image crawled; thumbnail deferred until requested.
 ';
     exit(0);
 }

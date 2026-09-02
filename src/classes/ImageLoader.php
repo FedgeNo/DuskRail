@@ -3,17 +3,15 @@
 declare(strict_types=1);
 
 /**
- * Decodes a fetched image and writes a thumbnail for it. Checks the
+ * Decodes fetched image bytes into a bounded JPEG thumbnail. Checks the
  * declared dimensions before decoding - a "decompression bomb" image is a
  * tiny file (a few KB) that decodes to an enormous pixel grid (gigabytes in
  * memory), and getimagesizefromstring() reads those dimensions from the
  * header without decoding a single pixel, so the bomb can be refused before
  * imagecreatefromstring() ever touches it.
  *
- * SVG goes a different way (loadSVG()): GD can't decode it at all, so it's
- * rendered by the same shared headless Chrome instance every fetch already
- * goes through, and the resulting bitmap comes back through the identical
- * dimension checks and thumbnailing as any other image.
+ * Nothing here fetches. ThumbnailCache supplies bytes only when a reader asks
+ * for an uncached thumbnail.
  */
 class ImageLoader
 {
@@ -37,13 +35,13 @@ class ImageLoader
      * of truth for the sharding scheme. Null for anything that isn't an
      * image, since only images ever get one.
      */
-    public static function thumbnailURL(int $itemId, ?string $type): ?string
+    public static function thumbnailURL(int $item_id, ?string $type): ?string
     {
         if ($type === null || !str_starts_with($type, 'image/')) {
             return null;
         }
 
-        return '/thumbnails/' . self::shard($itemId) . '/' . $itemId . '.jpg';
+        return '/thumbnails/' . self::shard($item_id) . '/' . $item_id . '.jpg';
     }
 
     public static function thumbnailDirectory(): string
@@ -62,7 +60,7 @@ class ImageLoader
         return self::$thumbnailDirectory;
     }
 
-    public static function load(string $data, int $itemId): ?\GdImage
+    public static function thumbnailBytes(string $data): ?string
     {
         $size = @getimagesizefromstring($data);
 
@@ -82,28 +80,10 @@ class ImageLoader
             return null;
         }
 
-        self::writeThumbnail($image, $itemId);
+        $bytes = self::resizedJPEG($image);
+        imagedestroy($image);
 
-        return $image;
-    }
-
-    /**
-     * An SVG, rendered to a bitmap by the shared browser and then treated as
-     * any other image. SVG is a real and common class of page content -
-     * diagrams, logos, charts - that GD has no decoder for at all, so it was
-     * being discarded outright along with genuinely broken images.
-     *
-     * Rendering rather than storing the SVG as-is is deliberate. An SVG is a
-     * document: it can carry <script>, event handlers and foreign objects,
-     * and serving one from this site's own origin would run all of that with
-     * this site's permissions. A rasterized copy carries none of it, and the
-     * rendering happens in Chrome's sandbox rather than in PHP.
-     */
-    public static function loadSVG(string $data, int $itemId, string $chromeEndpoint): ?\GdImage
-    {
-        $png = SVGRasterizer::toPNG($chromeEndpoint, $data);
-
-        return $png !== null ? self::load($png, $itemId) : null;
+        return $bytes;
     }
 
     /**
@@ -112,9 +92,9 @@ class ImageLoader
      * so leaving it behind just accumulates orphans nothing will ever serve
      * or clean up.
      */
-    public static function deleteThumbnail(int $itemId): void
+    public static function deleteThumbnail(int $item_id): void
     {
-        $path = self::thumbnailFile($itemId);
+        $path = self::thumbnailFile($item_id);
 
         if (is_file($path)) {
             @unlink($path);
@@ -130,7 +110,34 @@ class ImageLoader
         return $width >= self::MIN_DIMENSION && $height >= self::MIN_DIMENSION;
     }
 
-    private static function writeThumbnail(\GdImage $image, int $itemId): void
+    public static function storeThumbnail(int $item_id, string $bytes): string
+    {
+        $file = self::thumbnailFile($item_id);
+        $directory = dirname($file);
+
+        if (!is_dir($directory) && !mkdir($directory, 0755, true) && !is_dir($directory)) {
+            throw new \RuntimeException('Could not create thumbnail directory ' . $directory . '.');
+        }
+
+        $partial = $file . '.' . bin2hex(random_bytes(6));
+
+        if (file_put_contents($partial, $bytes) === false || !rename($partial, $file)) {
+            if (is_file($partial)) {
+                unlink($partial);
+            }
+
+            throw new \RuntimeException('Could not write thumbnail ' . $file . '.');
+        }
+
+        return $file;
+    }
+
+    public static function thumbnailFile(int $item_id): string
+    {
+        return self::thumbnailDirectory() . '/' . self::shard($item_id) . '/' . $item_id . '.jpg';
+    }
+
+    private static function resizedJPEG(\GdImage $image): ?string
     {
         $width = imagesx($image);
         $height = imagesy($image);
@@ -148,34 +155,22 @@ class ImageLoader
         imagefill($thumbnail, 0, 0, $white);
         imagecopyresampled($thumbnail, $image, 0, 0, 0, 0, $thumbnailWidth, $thumbnailHeight, $width, $height);
 
-        $file = self::thumbnailFile($itemId);
-        $directory = dirname($file);
-
-        if (!is_dir($directory) && !mkdir($directory, 0755, true) && !is_dir($directory)) {
-            throw new \RuntimeException('Could not create thumbnail directory ' . $directory . '.');
-        }
-
-        $written = imagejpeg($thumbnail, $file, 85);
+        ob_start();
+        $written = imagejpeg($thumbnail, null, 85);
+        $bytes = ob_get_clean();
         imagedestroy($thumbnail);
 
-        if (!$written) {
-            throw new \RuntimeException('Could not write thumbnail ' . $file . '.');
-        }
-    }
-
-    private static function thumbnailFile(int $itemId): string
-    {
-        return self::thumbnailDirectory() . '/' . self::shard($itemId) . '/' . $itemId . '.jpg';
+        return $written && is_string($bytes) ? $bytes : null;
     }
 
     /** Three base-100 directory levels, each named from 00 through 99. */
-    private static function shard(int $itemId): string
+    private static function shard(int $item_id): string
     {
         return sprintf(
             '%02d/%02d/%02d',
-            $itemId % 100,
-            intdiv($itemId, 100) % 100,
-            intdiv($itemId, 10_000) % 100
+            $item_id % 100,
+            intdiv($item_id, 100) % 100,
+            intdiv($item_id, 10_000) % 100
         );
     }
 }

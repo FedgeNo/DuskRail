@@ -306,6 +306,7 @@ if (is_file($env_path)) {
         'MANTICORE_PORT' => 'Manticore port',
         'MANTICORE_USERNAME' => 'Manticore application username',
         'THUMBNAIL_DIRECTORY' => 'Absolute thumbnail directory',
+        'THUMBNAIL_MINIMUM_FREE_BYTES' => 'Thumbnail cache free-space reserve (bytes, G or T)',
     ];
 
     $lines = [];
@@ -333,6 +334,11 @@ if (is_file($env_path)) {
 if (Env::get('THUMBNAIL_DIRECTORY', '') === '') {
     set_env_line($env_path, 'THUMBNAIL_DIRECTORY', ROOT_DIR . '/thumbnails');
     ok('Set THUMBNAIL_DIRECTORY in .env');
+}
+
+if (Env::get('THUMBNAIL_MINIMUM_FREE_BYTES', '') === '') {
+    set_env_line($env_path, 'THUMBNAIL_MINIMUM_FREE_BYTES', '1.5T');
+    ok('Set THUMBNAIL_MINIMUM_FREE_BYTES in .env');
 }
 
 // An .env written before this key existed has no way to sign in at all, and
@@ -380,6 +386,12 @@ function prompt_password_hash(): string
 heading('Checking database');
 
 $config = require ROOT_DIR . '/src/config.php';
+
+try {
+    ByteSize::bytes($config['thumbnailMinimumFreeBytes']);
+} catch (\InvalidArgumentException $exception) {
+    fail('Invalid THUMBNAIL_MINIMUM_FREE_BYTES: ' . $exception -> getMessage());
+}
 
 $runtime_password_was_generated = $config['password'] === '' || $config['password'] === 'change-me';
 
@@ -671,6 +683,20 @@ CREATE TABLE `SearchIndexQueue` (
   `syncLinks` tinyint(1) unsigned NOT NULL DEFAULT 0,
   `generation` int(10) unsigned NOT NULL DEFAULT 1,
   PRIMARY KEY (`itemId`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+');
+            },
+        ],
+        [
+            'name' => 'create_thumbnail_fetch_failures',
+            'check' => fn () => table_exists('ThumbnailFetchFailures'),
+            'apply' => function (): void {
+                run_sql('
+CREATE TABLE `ThumbnailFetchFailures` (
+  `itemId` int(10) unsigned NOT NULL,
+  `failedTime` int(10) unsigned NOT NULL,
+  PRIMARY KEY (`itemId`),
+  CONSTRAINT `ThumbnailFetchFailures_ibfk_1` FOREIGN KEY (`itemId`) REFERENCES `Items` (`itemId`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
 ');
             },
@@ -1323,7 +1349,22 @@ $php_binary = PHP_BINARY;
 $root = ROOT_DIR;
 $var_dir = VAR_DIR;
 $thumbnail_dir = ImageLoader::thumbnailDirectory();
+$thumbnail_link = $root . '/thumbnails';
 $site_host = parse_url($config['siteURL'], PHP_URL_HOST) ?: 'duskrail.localhost';
+
+if ($thumbnail_dir !== $thumbnail_link) {
+    if (is_link($thumbnail_link)) {
+        if (readlink($thumbnail_link) !== $thumbnail_dir) {
+            fail($thumbnail_link . ' points somewhere other than THUMBNAIL_DIRECTORY.');
+        }
+    } elseif (file_exists($thumbnail_link)) {
+        fail($thumbnail_link . ' must be moved before it can link to THUMBNAIL_DIRECTORY.');
+    } elseif (!symlink($thumbnail_dir, $thumbnail_link)) {
+        fail('Could not link ' . $thumbnail_link . ' to THUMBNAIL_DIRECTORY.');
+    } else {
+        ok('Linked public thumbnail path to THUMBNAIL_DIRECTORY');
+    }
+}
 
 // The web server only ever reads the checkout, so it needs traverse (x) on
 // every directory above it. Listed explicitly because a checkout under a home
@@ -1351,14 +1392,15 @@ sudo useradd --system --no-create-home --home-dir /var/lib/{$service_user} --she
 # configured for this path before the crawler starts.
 sudo mkdir -p {$thumbnail_dir}
 
-# The crawler writes thumbnails and cached lists; the web server only reads
-# DuskRail's media. Everything outside these explicit paths stays read-only to
-# both services. The default ACL keeps manual CLI runs by the checkout owner
-# working too.
+# The web server fills the thumbnail cache on demand; the crawler may delete a
+# stale cached thumbnail after recrawling its source. Everything outside these
+# explicit paths stays read-only. Default ACLs carry the same access into new
+# shard directories and keep manual CLI runs working too.
 sudo chown -R {$service_user}: {$thumbnail_dir} {$root}/data {$var_dir}
 sudo chmod 755 {$thumbnail_dir} {$root}/data
 sudo chmod 700 {$var_dir}
-sudo setfacl -R -m u:{$owner}:rwX -m d:u:{$owner}:rwX {$thumbnail_dir} {$root}/data {$var_dir}
+sudo setfacl -R -m u:{$owner}:rwX -m u:{$web_user}:rwX -m u:{$service_user}:rwX -m d:u:{$owner}:rwX -m d:u:{$web_user}:rwX -m d:u:{$service_user}:rwX {$thumbnail_dir}
+sudo setfacl -R -m u:{$owner}:rwX -m d:u:{$owner}:rwX {$root}/data {$var_dir}
 # The endpoint controls the whole shared browser. It is never public state and
 # must not be readable by unrelated local accounts.
 sudo touch {$var_dir}/chrome-devtools-endpoint
@@ -1434,8 +1476,8 @@ ServerSignature Off
     # An allowlist cannot fail that way, because a file nobody has thought
     # about is not served.
     <Directory {$root}>
-        # DuskRail's one rewrite maps public thumbnail URLs to the shared
-        # media drive. No other .htaccess directive class is enabled.
+        # DuskRail's one rewrite maps public thumbnail URLs to configured
+        # storage and sends cache misses to thumbnail.php.
         AllowOverride FileInfo
         # -Indexes so a directory with nothing to serve says so rather than
         # listing itself.
@@ -1453,7 +1495,7 @@ ServerSignature Off
         </FilesMatch>
 
         # The pages a visitor can actually be on.
-        <FilesMatch "^(index|login|logout|watch)\.php\$">
+        <FilesMatch "^(index|login|logout|thumbnail|watch)\.php\$">
             Require all granted
         </FilesMatch>
 
@@ -1480,9 +1522,8 @@ ServerSignature Off
         </FilesMatch>
     </Directory>
 
-    # .htaccess keeps /thumbnails/... as DuskRail's public URL and rewrites it
-    # to this vhost-local alias at the configured filesystem path.
-    Alias /media/duskrail/ "{$thumbnail_dir}/"
+    # The install links /thumbnails/ to this configured storage path. Its
+    # .htaccess rule sends only missing canonical JPEGs to thumbnail.php.
     <Directory "{$thumbnail_dir}">
         AllowOverride None
         Options -Indexes -ExecCGI

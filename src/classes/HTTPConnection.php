@@ -12,11 +12,10 @@ declare(strict_types=1);
  * Real page/image crawling goes through ChromeConnection instead (a genuine
  * request from the shared persistent Chrome instance, not an approximation
  * of one) - this class is left for fetches that aren't actually crawler
- * traffic against the target site at all (Host::fetchRobotsTxtIfMissing(),
- * TLDs.php's one-time IANA list fetch), where a plain, fast cURL GET is all
- * that's needed. Still sent with a real-Chrome-shaped header set rather than
- * a bare User-Agent, since there's no reason to make even these fetches look
- * unlike anything else this crawler sends.
+ * traffic against the target site or fetch a recorded image on demand
+ * (Host::fetchRobotsTxtIfMissing(), TLDs.php, ThumbnailCache), where a plain,
+ * fast cURL GET is all that's needed. Still sent with a real-Chrome-shaped
+ * header set rather than a bare User-Agent.
  */
 class HTTPConnection
 {
@@ -45,8 +44,12 @@ class HTTPConnection
     private string $body = '';
     private bool $bodyRead = false;
 
-    public function __construct(URL $url)
+    public function __construct(URL $url, int $timeout_seconds = 15)
     {
+        if ($timeout_seconds < 1) {
+            throw new \InvalidArgumentException('An HTTP timeout must be positive.');
+        }
+
         $addresses = IPAddress::publicAddressesFor($url -> host);
 
         // Resolution failure and a private/mixed answer set are both a
@@ -88,7 +91,7 @@ class HTTPConnection
             // following back on can only ever be redirected to the two
             // schemes this project fetches, never to a file:// or any other
             // protocol this build of curl happens to support.
-            CURLOPT_CONNECTTIMEOUT => 10,
+            CURLOPT_CONNECTTIMEOUT => min(10, $timeout_seconds),
             // A connect timeout alone only covers getting the connection open
             // - a server that accepts it and then sends nothing would hold
             // this open indefinitely, hanging the crawler worker until
@@ -97,7 +100,7 @@ class HTTPConnection
             // the whole transfer, including the window it sits paused in
             // between the constructor and readBody() - fine, since every
             // caller resumes immediately.
-            CURLOPT_TIMEOUT => 15,
+            CURLOPT_TIMEOUT => $timeout_seconds,
             CURLOPT_HTTPHEADER => self::chromeHeaders(),
             // Without this, curl sends no Accept-Encoding at all - but some
             // servers gzip the response anyway regardless (confirmed: a real
@@ -218,16 +221,9 @@ class HTTPConnection
         $trimmed = rtrim($line, "\r\n");
 
         if ($trimmed === '') {
-            // Blank line marks the end of a response's headers. With redirects
-            // followed, that happens once per hop - pausing on a redirect's
-            // headers would stop the transfer on the hop rather than on the
-            // response that actually answers the request, so only a final
-            // (non-redirect) response pauses here, before curl moves on to
-            // delivering body bytes to CURLOPT_WRITEFUNCTION.
-            if ($this -> statusCode !== null && $this -> statusCode >= 300 && $this -> statusCode < 400) {
-                return strlen($line);
-            }
-
+            // Blank line marks the end of the response's headers. Redirects
+            // are never automatic, so every response pauses before its body
+            // and the caller decides whether and where to follow it.
             curl_pause($ch, CURLPAUSE_ALL);
             $this -> headersComplete = true;
 

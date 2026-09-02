@@ -12,7 +12,7 @@ full-text index, MariaDB for authoritative data, and a small AJAX front end.
   a real, shared headless Chrome instance so requests are genuinely
   indistinguishable from an ordinary browser's.
 - **Indexes** each page's title, description, and full body text — HTML,
-  PDFs, and plain text alike — plus a thumbnail for every image it finds.
+  PDFs, and plain text alike — and records image URLs for on-demand thumbnails.
   Keywords are retained as metadata but do not influence search ranking.
 - **Searches** that index with Manticore ranking, over both pages and images,
   through a web UI with match snippets, infinite scroll, and an image preview
@@ -120,10 +120,10 @@ full-text index, MariaDB for authoritative data, and a small AJAX front end.
   stripped before body text is captured; the whitespace that rendering would
   imply is injected at block boundaries first, so minified markup doesn't
   extract as glued-together words; image `alt` text folded in.
-- **Image handling** — decodes and thumbnails images, rejecting tracking
-  pixels, tiny icons, and decompression bombs. SVG, which no image decoder
-  reads, is rendered by the shared browser and thumbnailed from that — as a
-  picture, never as a document, so nothing in it executes.
+- **Image handling** — crawling records an image URL and content type without
+  generating a file. The first thumbnail request fetches that recorded URL,
+  rejects undecodable, tiny, or oversized images, and creates a bounded JPEG;
+  later requests are served directly from disk without reaching PHP.
 - **Self-healing queue** — a page that fails outright is dropped and
   remembered; one that hangs the crawler is retried a bounded number of times
   first. Nothing that couldn't be turned into presentable content is ever
@@ -184,11 +184,10 @@ full-text index, MariaDB for authoritative data, and a small AJAX front end.
 ### Operations
 
 - **Two service accounts** — the crawler runs as its own system user, not as
-  the web server's. Its only writable paths are the configured thumbnail
-  directory, the TLD cache, and its own run state. Nothing crosses between
-  the two services through the filesystem — they share a database, which is
-  where the focused-crawl topic lives, so the web server needs no general
-  write access inside the project.
+  the web server's. The web server writes only the configured thumbnail cache;
+  the crawler can invalidate a cached thumbnail after recrawling its source
+  and otherwise writes only the TLD cache and its own run state. The focused
+  crawl topic crosses through the database, never a control file.
 - **Least-privilege database access** — the stored runtime identity has only
   SELECT/INSERT/UPDATE/DELETE. Installation and schema migrations use a
   separately supplied administrator identity that is never persisted.
@@ -198,6 +197,10 @@ full-text index, MariaDB for authoritative data, and a small AJAX front end.
 - **Contained services** — crawler and list-refresh units run with a read-only
   system/home view, private devices and temporary storage, no privilege
   escalation, a restrictive umask, and explicitly allowlisted writable paths.
+- **Capacity-aware media cache** — persistent thumbnail writes stop below the
+  `THUMBNAIL_MINIMUM_FREE_BYTES` reserve or when the filesystem is at least
+  95% full. The current request still receives transient thumbnail bytes, so
+  preserving the storage reserve does not create a broken image.
 - **Hardened serving** — the site is HTTPS-only (plain HTTP just redirects,
   with HSTS), every page carries a Content Security Policy that only allows
   this origin's own scripts and styles (possible because Bootstrap is served
@@ -259,7 +262,8 @@ full-text index, MariaDB for authoritative data, and a small AJAX front end.
   user that can read, write, and create only `duskrail_*` tables
 - An absolute `THUMBNAIL_DIRECTORY` path. A fresh installation defaults to
   `thumbnails/` in its checkout; point it at mounted bulk storage for a large
-  crawl
+  crawl. Set `THUMBNAIL_MINIMUM_FREE_BYTES` to a raw byte count or a decimal
+  value ending in `G` or `T` (for example, `1.5T`)
 - A Chrome or Chromium binary on `$PATH` (`chromium-browser`, `google-chrome`,
   `chromium`, or `google-chrome-stable` are auto-detected; set `CHROME_BINARY`
   in `.env` if it's installed under another name). The crawler doesn't

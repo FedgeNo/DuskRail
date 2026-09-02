@@ -68,6 +68,13 @@ CREATE TABLE `SearchIndexQueue` (
   PRIMARY KEY (`itemId`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+CREATE TABLE `ThumbnailFetchFailures` (
+  `itemId` int(10) unsigned NOT NULL,
+  `failedTime` int(10) unsigned NOT NULL,
+  PRIMARY KEY (`itemId`),
+  CONSTRAINT `ThumbnailFetchFailures_ibfk_1` FOREIGN KEY (`itemId`) REFERENCES `Items` (`itemId`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 -- URLs the crawler has already resolved as unusable. Their Items rows are
 -- gone (crawledTime means real, presentable content), and this is what keeps
 -- rediscovering one from starting the whole fetch-and-delete cycle again.
