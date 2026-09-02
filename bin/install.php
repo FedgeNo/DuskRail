@@ -572,6 +572,52 @@ function run_sql(string $sql): void
     }
 }
 
+function search_index_backfill_complete(): bool
+{
+    $state = json_decode((string) Setting::value('searchIndexBackfill'), true);
+
+    return is_array($state) && ($state['phase'] ?? '') === 'complete';
+}
+
+function run_search_index_backfill(): void
+{
+    $process = proc_open(
+        [PHP_BINARY, ROOT_DIR . '/bin/rebuild-search-index.php'],
+        [STDIN, STDOUT, STDERR],
+        $pipes,
+        ROOT_DIR
+    );
+
+    if (!is_resource($process)) {
+        fail('Could not start the Manticore backfill. MariaDB FULLTEXT indexes were left intact.');
+    }
+
+    if (proc_close($process) !== 0 || !search_index_backfill_complete()) {
+        fail('The Manticore backfill did not complete. MariaDB FULLTEXT indexes were left intact.');
+    }
+}
+
+/** @param string[] $index_names */
+function drop_indexes(string $table, array $index_names): void
+{
+    $table = validate_identifier($table, 'table name');
+    $clauses = [];
+
+    foreach ($index_names as $index_name) {
+        $index_name = validate_identifier($index_name, 'index name');
+        $clauses[] = 'DROP KEY `' . $index_name . '`';
+    }
+
+    if ($clauses === []) {
+        return;
+    }
+
+    run_sql('
+ALTER TABLE `' . $table . '`
+    ' . implode(',\n    ', $clauses) . '
+');
+}
+
 function schema_deltas(): array
 {
     return [
@@ -1140,6 +1186,32 @@ if ($config['manticoreUsername'] === '' || $config['manticorePassword'] === '') 
 
 SearchIndex::installSchema(ROOT_DIR . '/manticore-schema.sql');
 ok('DuskRail Manticore tables are ready');
+
+// Existing installations must copy their searchable rows before the old
+// MariaDB indexes disappear. The backfill checkpoints every bounded page and
+// drains SearchIndexQueue at the end, so an interrupted installer resumes and
+// concurrent crawler writes cannot fall between the two search systems.
+if (!search_index_backfill_complete()) {
+    heading('Backfilling Manticore search indexes');
+    run_search_index_backfill();
+    ok('Manticore search-index backfill complete');
+}
+
+$item_fulltext_indexes = array_values(array_filter(
+    ['title_description_keywords_fullText', 'title_description_fullText'],
+    static fn (string $index_name): bool => index_exists('Items', $index_name)
+));
+$link_fulltext_indexes = array_values(array_filter(
+    ['description'],
+    static fn (string $index_name): bool => index_exists('Links', $index_name)
+));
+
+if ($item_fulltext_indexes !== [] || $link_fulltext_indexes !== []) {
+    heading('Removing retired MariaDB FULLTEXT indexes');
+    drop_indexes('Items', $item_fulltext_indexes);
+    drop_indexes('Links', $link_fulltext_indexes);
+    ok('Retired MariaDB FULLTEXT indexes removed after the verified Manticore backfill');
+}
 
 // ---------- Published lists ----------
 //

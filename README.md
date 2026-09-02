@@ -294,10 +294,11 @@ notably the application-specific `MANTICORE_USERNAME` and
 setting if none of the auto-detected binary names match what's installed. A
 `WORKER_COUNT` change takes effect the next time the crawler manager starts.
 
-When upgrading an installation that already has crawled data, run
-`php bin/rebuild-search-index.php` once after the installer creates the
-Manticore tables. The backfill is resumable and copies only presentable,
-searchable items; uncrawled catalogue rows remain solely in MariaDB.
+When upgrading an installation that already has crawled data, the installer
+resumes or runs the initial Manticore backfill automatically. It copies only
+presentable, searchable items; uncrawled catalogue rows remain solely in
+MariaDB. Historical MariaDB FULLTEXT indexes are removed only after the
+backfill records successful completion.
 
 ## Usage
 
