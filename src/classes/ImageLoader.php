@@ -28,20 +28,13 @@ class ImageLoader
     private const MIN_DIMENSION = 100;
 
     private const THUMBNAIL_MAX_DIMENSION = 300;
-    private const THUMBNAIL_DIRECTORY = ROOT_DIR . '/thumbnails';
-
-    // A directory with hundreds of thousands of files in it gets slow to
-    // work with (listing, backing up, even just `ls`) on most filesystems -
-    // sharding into buckets of a few hundred keeps every individual
-    // directory small regardless of how large the crawl gets.
-    private const ITEMS_PER_SHARD = 500;
+    private const THUMBNAIL_DIRECTORY = '/var/www/html/media/duskrail';
 
     /**
      * The site-relative URL an item's thumbnail is (or, if it hasn't been
      * crawled/decoded successfully yet, would be) written to - single source
-     * of truth for the sharding scheme, so nothing else has to duplicate
-     * ITEMS_PER_SHARD to construct this path itself. Null for anything that
-     * isn't an image, since only images ever get one.
+     * of truth for the sharding scheme. Null for anything that isn't an
+     * image, since only images ever get one.
      */
     public static function thumbnailURL(int $itemId, ?string $type): ?string
     {
@@ -49,7 +42,12 @@ class ImageLoader
             return null;
         }
 
-        return '/thumbnails/' . intdiv($itemId, self::ITEMS_PER_SHARD) . '/' . $itemId . '.jpg';
+        return '/thumbnails/' . self::shard($itemId) . '/' . $itemId . '.jpg';
+    }
+
+    public static function thumbnailDirectory(): string
+    {
+        return self::THUMBNAIL_DIRECTORY;
     }
 
     public static function load(string $data, int $itemId): ?\GdImage
@@ -104,7 +102,7 @@ class ImageLoader
      */
     public static function deleteThumbnail(int $itemId): void
     {
-        $path = self::THUMBNAIL_DIRECTORY . '/' . intdiv($itemId, self::ITEMS_PER_SHARD) . '/' . $itemId . '.jpg';
+        $path = self::thumbnailFile($itemId);
 
         if (is_file($path)) {
             @unlink($path);
@@ -138,14 +136,34 @@ class ImageLoader
         imagefill($thumbnail, 0, 0, $white);
         imagecopyresampled($thumbnail, $image, 0, 0, 0, 0, $thumbnailWidth, $thumbnailHeight, $width, $height);
 
-        $shard = intdiv($itemId, self::ITEMS_PER_SHARD);
-        $directory = self::THUMBNAIL_DIRECTORY . '/' . $shard;
+        $file = self::thumbnailFile($itemId);
+        $directory = dirname($file);
 
-        if (!is_dir($directory)) {
-            mkdir($directory, 0755, true);
+        if (!is_dir($directory) && !mkdir($directory, 0755, true) && !is_dir($directory)) {
+            throw new \RuntimeException('Could not create thumbnail directory ' . $directory . '.');
         }
 
-        imagejpeg($thumbnail, $directory . '/' . $itemId . '.jpg', 85);
+        $written = imagejpeg($thumbnail, $file, 85);
         imagedestroy($thumbnail);
+
+        if (!$written) {
+            throw new \RuntimeException('Could not write thumbnail ' . $file . '.');
+        }
+    }
+
+    private static function thumbnailFile(int $itemId): string
+    {
+        return self::THUMBNAIL_DIRECTORY . '/' . self::shard($itemId) . '/' . $itemId . '.jpg';
+    }
+
+    /** Three base-100 directory levels, each named from 00 through 99. */
+    private static function shard(int $itemId): string
+    {
+        return sprintf(
+            '%02d/%02d/%02d',
+            $itemId % 100,
+            intdiv($itemId, 100) % 100,
+            intdiv($itemId, 10_000) % 100
+        );
     }
 }

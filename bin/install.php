@@ -247,10 +247,10 @@ if (trim((string) shell_exec('command -v pdftotext 2>/dev/null')) !== '') {
 
 heading('Checking directories');
 
-// Everything the running crawler writes: thumbnails it serves, the TLD cache,
-// and VAR_DIR's per-run state. These are the only directories the service user
-// ever needs write access to - the checkout around them stays read-only to it.
-foreach ([ROOT_DIR . '/thumbnails', ROOT_DIR . '/data', VAR_DIR] as $directory) {
+// Everything the running crawler writes inside the checkout: the TLD cache
+// and VAR_DIR's per-run state. Thumbnails live on the separately mounted
+// shared media drive and are prepared with the root-owned setup below.
+foreach ([ROOT_DIR . '/data', VAR_DIR] as $directory) {
     if (!is_dir($directory)) {
         mkdir($directory, 0755, true);
         ok('Created ' . $directory);
@@ -1237,6 +1237,7 @@ $owner = file_owner_name(ROOT_DIR) ?? get_current_user();
 $php_binary = PHP_BINARY;
 $root = ROOT_DIR;
 $var_dir = VAR_DIR;
+$thumbnail_dir = ImageLoader::thumbnailDirectory();
 $site_host = parse_url($config['siteURL'], PHP_URL_HOST) ?: 'duskrail.localhost';
 
 // The web server only ever reads the checkout, so it needs traverse (x) on
@@ -1260,17 +1261,19 @@ echo <<<SHELL
 # neither should be able to reach the other's files just by existing.
 sudo useradd --system --no-create-home --home-dir /var/lib/{$service_user} --shell /sbin/nologin {$service_user}
 
-# The three directories the crawler writes: thumbnails (served by the web
-# server, so it reads them too), the cached published lists (written by the
-# refresh timer, read by both services), and its own run state. The
-# checkout itself stays owned by whoever cloned it and is never writable by
-# either service - nothing in it needs to be. The default ACL (d:) is what
-# makes files the crawler creates later inherit the same access, rather than
-# only the directories that exist right now having it.
-sudo chown -R {$service_user}: {$root}/thumbnails {$root}/data {$var_dir}
-sudo chmod 755 {$root}/thumbnails {$root}/data
+# The thumbnail directory is on the shared media filesystem. Refuse to create
+# it on the root filesystem if that mount is absent; a later mount would hide
+# every new thumbnail written in the meantime.
+mountpoint -q /var/www/html/media || { echo "/var/www/html/media is not mounted" >&2; exit 1; }
+sudo mkdir -p {$thumbnail_dir}
+
+# The crawler writes thumbnails and cached lists; the web server only reads
+# DuskRail's media. The checkout itself stays read-only to both services. The
+# default ACL keeps manual CLI runs by the checkout owner working too.
+sudo chown -R {$service_user}: {$thumbnail_dir} {$root}/data {$var_dir}
+sudo chmod 755 {$thumbnail_dir} {$root}/data
 sudo chmod 700 {$var_dir}
-sudo setfacl -R -m u:{$owner}:rwX -m d:u:{$owner}:rwX {$root}/thumbnails {$root}/data {$var_dir}
+sudo setfacl -R -m u:{$owner}:rwX -m d:u:{$owner}:rwX {$thumbnail_dir} {$root}/data {$var_dir}
 # The endpoint controls the whole shared browser. It is never public state and
 # must not be readable by unrelated local accounts.
 sudo touch {$var_dir}/chrome-devtools-endpoint
@@ -1298,8 +1301,8 @@ if (trim((string) shell_exec('command -v getenforce 2>/dev/null')) !== '') {
 # reads or writes are labelled accordingly. Registered with semanage, not just
 # applied with chcon, so the labels survive a relabel.
 sudo semanage fcontext -a -t httpd_sys_content_t "{$root}(/.*)?"
-sudo semanage fcontext -a -t httpd_sys_rw_content_t "{$root}/thumbnails(/.*)?"
-sudo restorecon -Rv {$root}
+sudo semanage fcontext -a -t httpd_sys_rw_content_t "{$thumbnail_dir}(/.*)?"
+sudo restorecon -Rv {$root} {$thumbnail_dir}
 
 SHELL;
 
@@ -1346,9 +1349,9 @@ ServerSignature Off
     # An allowlist cannot fail that way, because a file nobody has thought
     # about is not served.
     <Directory {$root}>
-        # .htaccess is not used, and honouring it means every request walks
-        # the directory tree looking for one it will not find.
-        AllowOverride None
+        # DuskRail's one rewrite maps public thumbnail URLs to the shared
+        # media drive. No other .htaccess directive class is enabled.
+        AllowOverride FileInfo
         # -Indexes so a directory with nothing to serve says so rather than
         # listing itself.
         Options -Indexes -ExecCGI +FollowSymLinks
@@ -1392,13 +1395,24 @@ ServerSignature Off
         </FilesMatch>
     </Directory>
 
-    # Crawled image thumbnails, written by the crawler and read by the web
-    # server. Only the .jpg files it actually writes.
-    <Directory {$root}/thumbnails>
+    # .htaccess keeps /thumbnails/... as DuskRail's public URL and rewrites it
+    # to this vhost-local alias on the shared media filesystem.
+    Alias /media/duskrail/ {$thumbnail_dir}/
+    <Directory {$thumbnail_dir}>
+        AllowOverride None
+        Options -Indexes -ExecCGI
+        Require all denied
         <FilesMatch "\.jpg\$">
             Require all granted
         </FilesMatch>
     </Directory>
+
+    # The checkout is deny-by-default, including nonexistent shard
+    # directories. Grant only the exact public thumbnail URL shape so the
+    # root .htaccess rewrite can map it to the alias above.
+    <LocationMatch "^/thumbnails/[0-9]{2}/[0-9]{2}/[0-9]{2}/[0-9]+\.jpg\$">
+        Require all granted
+    </LocationMatch>
 
     # Belt and braces over the deny-by-default above: no dot-directory or
     # dot-file at any depth, whatever else may grant it. .git is the one that
@@ -1475,12 +1489,14 @@ sudo tee /etc/systemd/system/duskrail-crawler.service > /dev/null <<'EOF'
 Description=DuskRail crawler manager (supervises bin/crawler.php workers)
 After=network-online.target mariadb.service
 Wants=network-online.target
+RequiresMountsFor={$thumbnail_dir}
 
 [Service]
 Type=simple
 User={$service_user}
 Group={$service_user}
 WorkingDirectory={$root}
+ExecStartPre=/usr/bin/mountpoint -q /var/www/html/media
 ExecStart={$php_binary} {$root}/bin/crawler-manager.php
 # SIGTERM to the manager alone (not the whole cgroup) so it can drain workers
 # gracefully - it stops spawning and exits once every in-flight worker has
@@ -1505,7 +1521,7 @@ ProtectSystem=strict
 ProtectHome=read-only
 PrivateDevices=true
 UMask=0077
-ReadWritePaths={$root}/thumbnails {$root}/data {$var_dir}
+ReadWritePaths={$thumbnail_dir} {$root}/data {$var_dir}
 # systemd hands services a 1024 soft file-descriptor limit and expects a
 # daemon needing more to raise it itself. Chrome does not, and a browser
 # driving several tabs over TLS exhausts 1024 easily - at which point requests

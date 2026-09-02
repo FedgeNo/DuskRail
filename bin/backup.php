@@ -6,10 +6,10 @@ declare(strict_types=1);
  * Backs up everything DuskRail can't regenerate: `php bin/backup.php`.
  *
  * Two artifacts per run, timestamped: a gzipped mysqldump of the database
- * (the index, the link graph, the queue) and a tar of thumbnails/ (originals
- * aren't stored, so a lost thumbnail means refetching the image to remake
- * it). data/ isn't included - the TLD list refetches itself - and neither is
- * var/, which is only ever live run state.
+ * (the index, the link graph, the queue) and a tar of DuskRail's shared-media
+ * thumbnail directory (originals aren't stored, so a lost thumbnail means
+ * refetching the image to remake it). data/ isn't included - the TLD list
+ * refetches itself - and neither is var/, which is only ever live run state.
  *
  * Backups land in backups/ inside the project (gitignored) unless a
  * different directory is given as the first argument. The last KEEP_RUNS
@@ -100,7 +100,8 @@ echo 'Database: ' . $databaseFile . ' (' . number_format((int) filesize($databas
 
 passthru(
     'tar -czf ' . escapeshellarg($thumbnailsFile)
-        . ' -C ' . escapeshellarg(ROOT_DIR) . ' thumbnails',
+        . ' -C ' . escapeshellarg(dirname(ImageLoader::thumbnailDirectory()))
+        . ' ' . escapeshellarg(basename(ImageLoader::thumbnailDirectory())),
     $tarStatus
 );
 
