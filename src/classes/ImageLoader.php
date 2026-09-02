@@ -28,7 +28,8 @@ class ImageLoader
     private const MIN_DIMENSION = 100;
 
     private const THUMBNAIL_MAX_DIMENSION = 300;
-    private const THUMBNAIL_DIRECTORY = '/var/www/html/media/duskrail';
+
+    private static ?string $thumbnailDirectory = null;
 
     /**
      * The site-relative URL an item's thumbnail is (or, if it hasn't been
@@ -47,7 +48,18 @@ class ImageLoader
 
     public static function thumbnailDirectory(): string
     {
-        return self::THUMBNAIL_DIRECTORY;
+        if (self::$thumbnailDirectory === null) {
+            $config = require ROOT_DIR . '/src/config.php';
+            $directory = rtrim($config['thumbnailDirectory'], '/');
+
+            if (!preg_match('~^/[A-Za-z0-9._/-]+$~D', $directory)) {
+                throw new \RuntimeException('THUMBNAIL_DIRECTORY must be an absolute path containing only letters, numbers, dot, underscore, hyphen, and slash.');
+            }
+
+            self::$thumbnailDirectory = $directory;
+        }
+
+        return self::$thumbnailDirectory;
     }
 
     public static function load(string $data, int $itemId): ?\GdImage
@@ -153,7 +165,7 @@ class ImageLoader
 
     private static function thumbnailFile(int $itemId): string
     {
-        return self::THUMBNAIL_DIRECTORY . '/' . self::shard($itemId) . '/' . $itemId . '.jpg';
+        return self::thumbnailDirectory() . '/' . self::shard($itemId) . '/' . $itemId . '.jpg';
     }
 
     /** Three base-100 directory levels, each named from 00 through 99. */

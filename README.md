@@ -184,11 +184,11 @@ full-text index, MariaDB for authoritative data, and a small AJAX front end.
 ### Operations
 
 - **Two service accounts** — the crawler runs as its own system user, not as
-  the web server's. Nothing in the checkout is writable by either; the only
-  writable paths are its directory on the shared media drive, the TLD cache,
-  and the crawler's own run state. Nothing crosses between the two through the
-  filesystem — they share a database, which is where the focused-crawl topic
-  lives, so the web server needs no write access anywhere inside the project.
+  the web server's. Its only writable paths are the configured thumbnail
+  directory, the TLD cache, and its own run state. Nothing crosses between
+  the two services through the filesystem — they share a database, which is
+  where the focused-crawl topic lives, so the web server needs no general
+  write access inside the project.
 - **Least-privilege database access** — the stored runtime identity has only
   SELECT/INSERT/UPDATE/DELETE. Installation and schema migrations use a
   separately supplied administrator identity that is never persisted.
@@ -208,8 +208,8 @@ full-text index, MariaDB for authoritative data, and a small AJAX front end.
   is running and its last hour's throughput, a control to focus the crawl on
   a topic (ranking not-yet-crawled URLs by how on-topic the pages linking to
   them are), and a box to seed new URLs into the queue.
-- **`bin/backup.php`** — dumps the database and archives DuskRail's directory
-  on the shared media drive, timestamped, keeping the last seven runs.
+- **`bin/backup.php`** — dumps the database and archives DuskRail's configured
+  thumbnail directory, timestamped, keeping the last seven runs.
   `mysqldump` and `gzip` are checked independently and an artifact is accepted
   only when it contains schema.
 - **`bin/test.php`** — a dependency-free test suite over the pure logic (URL
@@ -257,8 +257,9 @@ full-text index, MariaDB for authoritative data, and a small AJAX front end.
 - MariaDB or MySQL
 - A system-wide Manticore Search service with a least-privilege application
   user that can read, write, and create only `duskrail_*` tables
-- A mounted media filesystem at `/var/www/html/media`; the installer refuses
-  to create DuskRail's thumbnail directory when that mount is absent
+- An absolute `THUMBNAIL_DIRECTORY` path. A fresh installation defaults to
+  `thumbnails/` in its checkout; point it at mounted bulk storage for a large
+  crawl
 - A Chrome or Chromium binary on `$PATH` (`chromium-browser`, `google-chrome`,
   `chromium`, or `google-chrome-stable` are auto-detected; set `CHROME_BINARY`
   in `.env` if it's installed under another name). The crawler doesn't

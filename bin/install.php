@@ -247,9 +247,9 @@ if (trim((string) shell_exec('command -v pdftotext 2>/dev/null')) !== '') {
 
 heading('Checking directories');
 
-// Everything the running crawler writes inside the checkout: the TLD cache
-// and VAR_DIR's per-run state. Thumbnails live on the separately mounted
-// shared media drive and are prepared with the root-owned setup below.
+// The crawler's fixed checkout-local state: the TLD cache and VAR_DIR's
+// per-run files. Its configurable thumbnail directory is prepared with the
+// root-owned setup below and may live either here or on mounted storage.
 foreach ([ROOT_DIR . '/data', VAR_DIR] as $directory) {
     if (!is_dir($directory)) {
         mkdir($directory, 0755, true);
@@ -288,6 +288,11 @@ if (is_file($env_path)) {
         $defaults[trim($key)] = trim($value);
     }
 
+    // The portable default follows the checkout instead of assuming where
+    // this machine mounts bulk storage. Production installs can choose their
+    // mounted-media path at the prompt.
+    $defaults['THUMBNAIL_DIRECTORY'] = ROOT_DIR . '/thumbnails';
+
     // Only these are worth an interactive prompt - the rest (SITE_URL,
     // SITE_TITLE, ...) are fine taking .env.example's default straight
     // through, same as they always have via Env::get()'s fallback.
@@ -300,6 +305,7 @@ if (is_file($env_path)) {
         'MANTICORE_HOST' => 'Manticore host',
         'MANTICORE_PORT' => 'Manticore port',
         'MANTICORE_USERNAME' => 'Manticore application username',
+        'THUMBNAIL_DIRECTORY' => 'Absolute thumbnail directory',
     ];
 
     $lines = [];
@@ -320,6 +326,13 @@ if (is_file($env_path)) {
 ', $lines) . '
 ');
     ok('Wrote .env');
+}
+
+// Preserve the historical checkout-relative location when upgrading an
+// installation whose .env predates configurable thumbnail storage.
+if (Env::get('THUMBNAIL_DIRECTORY', '') === '') {
+    set_env_line($env_path, 'THUMBNAIL_DIRECTORY', ROOT_DIR . '/thumbnails');
+    ok('Set THUMBNAIL_DIRECTORY in .env');
 }
 
 // An .env written before this key existed has no way to sign in at all, and
@@ -1261,15 +1274,15 @@ echo <<<SHELL
 # neither should be able to reach the other's files just by existing.
 sudo useradd --system --no-create-home --home-dir /var/lib/{$service_user} --shell /sbin/nologin {$service_user}
 
-# The thumbnail directory is on the shared media filesystem. Refuse to create
-# it on the root filesystem if that mount is absent; a later mount would hide
-# every new thumbnail written in the meantime.
-mountpoint -q /var/www/html/media || { echo "/var/www/html/media is not mounted" >&2; exit 1; }
+# THUMBNAIL_DIRECTORY chooses whether these files live in the checkout or on
+# separately mounted bulk storage. RequiresMountsFor below brings up any mount
+# configured for this path before the crawler starts.
 sudo mkdir -p {$thumbnail_dir}
 
 # The crawler writes thumbnails and cached lists; the web server only reads
-# DuskRail's media. The checkout itself stays read-only to both services. The
-# default ACL keeps manual CLI runs by the checkout owner working too.
+# DuskRail's media. Everything outside these explicit paths stays read-only to
+# both services. The default ACL keeps manual CLI runs by the checkout owner
+# working too.
 sudo chown -R {$service_user}: {$thumbnail_dir} {$root}/data {$var_dir}
 sudo chmod 755 {$thumbnail_dir} {$root}/data
 sudo chmod 700 {$var_dir}
@@ -1396,9 +1409,9 @@ ServerSignature Off
     </Directory>
 
     # .htaccess keeps /thumbnails/... as DuskRail's public URL and rewrites it
-    # to this vhost-local alias on the shared media filesystem.
-    Alias /media/duskrail/ {$thumbnail_dir}/
-    <Directory {$thumbnail_dir}>
+    # to this vhost-local alias at the configured filesystem path.
+    Alias /media/duskrail/ "{$thumbnail_dir}/"
+    <Directory "{$thumbnail_dir}">
         AllowOverride None
         Options -Indexes -ExecCGI
         Require all denied
@@ -1496,7 +1509,6 @@ Type=simple
 User={$service_user}
 Group={$service_user}
 WorkingDirectory={$root}
-ExecStartPre=/usr/bin/mountpoint -q /var/www/html/media
 ExecStart={$php_binary} {$root}/bin/crawler-manager.php
 # SIGTERM to the manager alone (not the whole cgroup) so it can drain workers
 # gracefully - it stops spawning and exits once every in-flight worker has

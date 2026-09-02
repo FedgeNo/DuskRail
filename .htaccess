@@ -1,8 +1,8 @@
 <IfModule mod_rewrite.c>
     RewriteEngine On
 
-    # The public URL remains DuskRail-owned while the bytes live on the
-    # shared media drive. Every path component is constrained to the exact
-    # three-level decimal shard layout before it reaches the vhost's alias.
+    # The public URL remains DuskRail-owned while the configured storage can
+    # live outside the checkout. Every path component is constrained to the
+    # exact three-level decimal shard layout before it reaches the alias.
     RewriteRule ^thumbnails/([0-9]{2}/[0-9]{2}/[0-9]{2}/[0-9]+\.jpg)$ /media/duskrail/$1 [PT,L]
 </IfModule>
