@@ -10,8 +10,16 @@ header('Content-Type: application/json');
 // grows. RateLimit answers 429 and stops here if the caller is over budget.
 RateLimit::enforcePublicAPI();
 
+$query = trim((string) ($_GET['q'] ?? ''));
+
+if (mb_strlen($query, 'UTF-8') > SearchResults::MAX_QUERY_LENGTH) {
+    http_response_code(400);
+    echo json_encode(['error' => 'query is too long']);
+    exit;
+}
+
 echo json_encode((new SearchResults(
-    trim((string) ($_GET['q'] ?? '')),
+    $query,
     (string) ($_GET['type'] ?? 'html'),
     (int) ($_GET['offset'] ?? 0)
 )) -> toJSON());

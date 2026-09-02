@@ -57,6 +57,15 @@ class HeadlessBrowser
         'chartbeat.com', 'parsely.com', 'sharethis.com', 'addthis.com', 'zdassets.com',
     ];
 
+    // The exact third-party host a Cloudflare challenge may legitimately use.
+    // Everything else must stay on the page's own registrable domain: a page
+    // opts into this execution path with nothing more than its <title>, so it
+    // does not get to turn the crawler into a request source for arbitrary
+    // unrelated services.
+    private const CHALLENGE_PROVIDER_HOSTS = [
+        'challenges.cloudflare.com',
+    ];
+
     // Same fake identity ChromeConnection presents - real Chrome's own UA
     // says "HeadlessChrome" outright, which would be visible to (and could
     // itself trip) the very challenge script this is trying to get past.
@@ -136,7 +145,7 @@ class HeadlessBrowser
             }
 
             if (($message['method'] ?? null) === 'Fetch.requestPaused') {
-                self::handleRequestPaused($tab, $message['params'], $pageURLString, $html, $mainDocumentFulfilled);
+                self::handleRequestPaused($tab, $message['params'], $pageURL, $html, $mainDocumentFulfilled);
                 continue;
             }
 
@@ -170,12 +179,12 @@ class HeadlessBrowser
         return $response['result']['result']['value'] ?? null;
     }
 
-    private static function handleRequestPaused(ChromeTab $tab, array $params, string $pageURLString, string $html, bool &$mainDocumentFulfilled): void
+    private static function handleRequestPaused(ChromeTab $tab, array $params, URL $pageURL, string $html, bool &$mainDocumentFulfilled): void
     {
         $requestId = $params['requestId'];
         $isMainDocument = !$mainDocumentFulfilled
             && ($params['resourceType'] ?? null) === 'Document'
-            && ($params['request']['url'] ?? null) === $pageURLString;
+            && ($params['request']['url'] ?? null) === $pageURL -> toString();
 
         if ($isMainDocument) {
             $mainDocumentFulfilled = true;
@@ -191,7 +200,7 @@ class HeadlessBrowser
 
         $url = (string) ($params['request']['url'] ?? '');
 
-        if (!self::isReachableTarget($url) || self::isBlocked($url)) {
+        if (!self::isAllowedChallengeTarget($url, $pageURL) || self::isBlocked($url)) {
             $tab -> sendCommand('Fetch.failRequest', ['requestId' => $requestId, 'errorReason' => 'BlockedByClient']);
 
             return;
@@ -220,7 +229,7 @@ class HeadlessBrowser
      * internet - resolved for real rather than pattern-matched on the name,
      * since a name is not an address (see IPAddress).
      */
-    private static function isReachableTarget(string $url): bool
+    public static function isAllowedChallengeTarget(string $url, URL $pageURL): bool
     {
         $scheme = strtolower((string) parse_url($url, PHP_URL_SCHEME));
         $host = strtolower((string) parse_url($url, PHP_URL_HOST));
@@ -233,14 +242,28 @@ class HeadlessBrowser
         // syntax rather than part of the address.
         $host = trim($host, '[]');
 
-        // Written as an address, it's judged as one; written as a name, it's
-        // whatever that name resolves to. Both spellings reach the same
-        // machine, so both have to be asked the same question.
+        // No literal can share a registrable domain with the page, and no
+        // challenge provider is addressed this way. Refusing them also keeps
+        // the domain comparison below unambiguous.
         if (filter_var($host, FILTER_VALIDATE_IP) !== false) {
-            return IPAddress::isPubliclyRoutable($host);
+            return false;
         }
 
-        return IPAddress::hostResolvesPublicly($host);
+        return self::isAllowedChallengeHost($host, $pageURL)
+            && IPAddress::hostResolvesPublicly($host);
+    }
+
+    /** Pure hostname scope policy, kept public so its boundary is testable. */
+    public static function isAllowedChallengeHost(string $host, URL $pageURL): bool
+    {
+        $host = strtolower(trim($host, '.'));
+
+        if ($host === '' || filter_var($host, FILTER_VALIDATE_IP) !== false) {
+            return false;
+        }
+
+        return in_array($host, self::CHALLENGE_PROVIDER_HOSTS, true)
+            || PublicSuffixList::registrableDomain($host) === PublicSuffixList::registrableDomain($pageURL -> host);
     }
 
     /**

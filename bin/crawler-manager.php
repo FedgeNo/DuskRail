@@ -111,22 +111,18 @@ function delete_item_by_id(int $itemId): void
 /**
  * Blanks the published endpoint - emptied, never deleted. An empty file
  * already means "no Chrome available" to bin/crawler.php, and the file
- * carries permissions it can't recreate for itself: this manager runs as
- * apache, which has no write access to the project directory, so
- * bin/install.php creates the file and grants apache write on that one path.
- * Deleting it would take the ACL and SELinux label with it and leave the next
- * run unable to publish an endpoint at all - silently, since there'd be
- * nothing to write to and no way to say so.
+ * carries deliberately restrictive permissions: bin/install.php grants only
+ * the checkout owner and crawler service account access to it.
  */
 function clear_chrome_endpoint(): void
 {
     file_put_contents(CHROME_DEVTOOLS_ENDPOINT_FILE, '');
 }
 
-function launch_chrome(): ?ChromeProcess
+function launch_chrome(OutboundProxyProcess $proxy): ?ChromeProcess
 {
     try {
-        $chrome = new ChromeProcess();
+        $chrome = new ChromeProcess($proxy -> hostAndPort);
     } catch (\Throwable $exception) {
         fwrite(STDERR, 'Failed to launch Chrome: ' . $exception -> getMessage() . '
 ');
@@ -158,7 +154,7 @@ function launch_chrome(): ?ChromeProcess
  * or if the attempt itself just failed - true otherwise, including when the
  * existing generation was already fine as-is.
  */
-function ensure_current_chrome_generation(array &$chromeInstances, int &$currentGeneration, float &$lastAttemptAt): bool
+function ensure_current_chrome_generation(array &$chromeInstances, int &$currentGeneration, float &$lastAttemptAt, OutboundProxyProcess $proxy): bool
 {
     $current = $chromeInstances[$currentGeneration] ?? null;
 
@@ -171,7 +167,7 @@ function ensure_current_chrome_generation(array &$chromeInstances, int &$current
     }
 
     $lastAttemptAt = microtime(true);
-    $replacement = launch_chrome();
+    $replacement = launch_chrome($proxy);
 
     if ($replacement === null) {
         return $current !== null && $current['process'] -> isHealthy();
@@ -292,6 +288,16 @@ $chromeGeneration = 0;
 $chromeInstances = [];
 $lastChromeAttemptAt = 0.0;
 
+try {
+    $outboundProxy = new OutboundProxyProcess();
+    echo 'Pinned outbound proxy ready at ' . $outboundProxy -> hostAndPort . '
+';
+} catch (\Throwable $exception) {
+    fwrite(STDERR, 'Couldn\'t launch outbound proxy: ' . $exception -> getMessage() . '
+');
+    exit(1);
+}
+
 $sweptBrowsers = ChromeProcess::sweepAbandoned();
 
 if ($sweptBrowsers > 0) {
@@ -299,7 +305,7 @@ if ($sweptBrowsers > 0) {
 ';
 }
 
-if (!ensure_current_chrome_generation($chromeInstances, $chromeGeneration, $lastChromeAttemptAt)) {
+if (!ensure_current_chrome_generation($chromeInstances, $chromeGeneration, $lastChromeAttemptAt, $outboundProxy)) {
     fwrite(STDERR, 'Couldn\'t launch Chrome, exiting.
 ');
     exit(1);
@@ -326,10 +332,16 @@ while (true) {
     foreach ($chromeInstances as $instance) {
         $instance['process'] -> drainOutput();
     }
+    $outboundProxy -> drainOutput();
+
+    if (!$outboundProxy -> isHealthy()) {
+        fwrite(STDERR, 'Outbound proxy stopped unexpectedly; draining workers and shutting down.\n');
+        $shuttingDown = true;
+    }
 
     foreach ($workers as $slot => $worker) {
         if ($worker === null && !$shuttingDown) {
-            if (!ensure_current_chrome_generation($chromeInstances, $chromeGeneration, $lastChromeAttemptAt)) {
+            if (!ensure_current_chrome_generation($chromeInstances, $chromeGeneration, $lastChromeAttemptAt, $outboundProxy)) {
                 continue;
             }
 
@@ -355,6 +367,7 @@ while (true) {
         }
 
         clear_chrome_endpoint();
+        $outboundProxy -> shutdown();
         exit(0);
     }
 

@@ -38,23 +38,59 @@ $stamp = date('Ymd-His');
 $databaseFile = $directory . '/duskrail-db-' . $stamp . '.sql.gz';
 $thumbnailsFile = $directory . '/duskrail-thumbnails-' . $stamp . '.tar.gz';
 
-// The password goes through the environment, never the command line - argv
-// is world-readable in /proc for as long as mysqldump runs.
-putenv('MYSQL_PWD=' . $config['password']);
+$dumpError = tmpfile();
+$gzipError = tmpfile();
+$environment = getenv();
+$environment['MYSQL_PWD'] = $config['password'];
+$dumpCommand = [
+    'mysqldump', '--single-transaction', '--quick', '--skip-lock-tables', '--skip-triggers', '--no-tablespaces',
+    '-h', $config['host'],
+    '-P', (string) $config['port'],
+    '-u', $config['username'],
+    $config['database'],
+];
 
-$dumpCommand = 'mysqldump --single-transaction --quick'
-    . ' -h ' . escapeshellarg($config['host'])
-    . ' -P ' . escapeshellarg((string) $config['port'])
-    . ' -u ' . escapeshellarg($config['username'])
-    . ' ' . escapeshellarg($config['database'])
-    . ' | gzip > ' . escapeshellarg($databaseFile);
+// Two independently supervised processes rather than a shell pipeline: a
+// successful gzip must never hide a failed mysqldump. Command arrays also
+// avoid a shell entirely, and MYSQL_PWD stays out of world-readable argv.
+$gzip = proc_open(
+    ['gzip', '-c'],
+    [0 => ['pipe', 'r'], 1 => ['file', $databaseFile, 'w'], 2 => $gzipError],
+    $gzipPipes
+);
+$dump = is_resource($gzip) ? proc_open(
+    $dumpCommand,
+    [0 => ['file', '/dev/null', 'r'], 1 => ['pipe', 'w'], 2 => $dumpError],
+    $dumpPipes,
+    null,
+    $environment
+) : false;
 
-passthru($dumpCommand, $dumpStatus);
-putenv('MYSQL_PWD');
+if (is_resource($dump) && is_resource($gzip)) {
+    stream_copy_to_stream($dumpPipes[1], $gzipPipes[0]);
+    fclose($dumpPipes[1]);
+    fclose($gzipPipes[0]);
+} elseif (is_resource($gzip) && isset($gzipPipes[0]) && is_resource($gzipPipes[0])) {
+    fclose($gzipPipes[0]);
+}
 
-if ($dumpStatus !== 0 || !is_file($databaseFile) || filesize($databaseFile) === 0) {
+$dumpStatus = is_resource($dump) ? proc_close($dump) : 1;
+$gzipStatus = is_resource($gzip) ? proc_close($gzip) : 1;
+
+rewind($dumpError);
+rewind($gzipError);
+$errors = trim(stream_get_contents($dumpError) . "\n" . stream_get_contents($gzipError));
+fclose($dumpError);
+fclose($gzipError);
+
+if ($dumpStatus !== 0 || $gzipStatus !== 0 || !backup_contains_schema($databaseFile)) {
     fwrite(STDERR, 'Database dump failed.
 ');
+
+    if ($errors !== '') {
+        fwrite(STDERR, $errors . "\n");
+    }
+
     @unlink($databaseFile);
     exit(1);
 }
@@ -94,3 +130,27 @@ foreach (['duskrail-db-', 'duskrail-thumbnails-'] as $prefix) {
 
 echo 'Done.
 ';
+
+/** A real DuskRail dump necessarily contains at least one CREATE TABLE. */
+function backup_contains_schema(string $path): bool
+{
+    if (!is_file($path) || filesize($path) === 0) {
+        return false;
+    }
+
+    $handle = @gzopen($path, 'rb');
+
+    if ($handle === false) {
+        return false;
+    }
+
+    $sample = '';
+
+    while (!gzeof($handle) && strlen($sample) < 2 * 1024 * 1024) {
+        $sample .= (string) gzread($handle, 65536);
+    }
+
+    gzclose($handle);
+
+    return str_contains($sample, 'CREATE TABLE');
+}

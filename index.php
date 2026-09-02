@@ -44,6 +44,7 @@ $queryInput = new Input();
 $queryInput -> id = 'query-input';
 $queryInput -> type = 'text';
 $queryInput -> name = 'q';
+$queryInput -> attributes['maxlength'] = (string) SearchResults::MAX_QUERY_LENGTH;
 $queryInput -> value = $query;
 $queryInput -> placeholder = 'Search DuskRail…';
 $queryInput -> class = 'form-control';

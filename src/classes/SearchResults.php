@@ -38,6 +38,7 @@ declare(strict_types=1);
 class SearchResults
 {
     public const PAGE_SIZE = 50;
+    public const MAX_QUERY_LENGTH = 256;
 
     // Everything the "Pages" facet covers - matches what the crawler can
     // extract searchable text from (ContentType::isHTML(), plus the PDF and

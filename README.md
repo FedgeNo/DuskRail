@@ -41,8 +41,9 @@ and a small AJAX front end to search it.
   second time. This is the only path where a crawled page actually executes,
   and it's entered on the page's own say-so (the interstitial is recognized
   by its title), so it's treated as hostile by construction: that tab may
-  only reach public http(s) addresses, downloads are denied, new windows are
-  blocked, and the renderer's heap is capped.
+  only reach its own registrable domain or the exact reviewed Cloudflare
+  challenge host, downloads are denied, new windows are blocked, and the
+  renderer's heap is capped.
 - **Concurrent workers, one shared browser** — a supervisor
   (`bin/crawler-manager.php`) runs several single-item worker processes at
   once, each opening its own isolated tab (separate cookies/storage) in one
@@ -96,10 +97,12 @@ and a small AJAX front end to search it.
   that points at a loopback, private, link-local (the cloud metadata endpoint
   included), or otherwise reserved address is refused — as is a host that
   resolves to a mix of public and private addresses, since it, not the
-  crawler, would pick which one got connected to. The same check runs again
-  on every redirect hop, on every host a sitemap redirects to, and on every
-  subresource a challenge page asks for; neither HTTP client follows a
-  redirect on its own.
+  crawler, would pick which one got connected to. Empty DNS answers are also
+  refused. The approved answer is pinned to the connection: cURL uses
+  `CURLOPT_RESOLVE`, while Chromium uses a crawler-owned loopback SOCKS proxy
+  that resolves, validates, and connects atomically without losing TLS SNI or
+  certificate verification. `robots.txt` redirects stay on their original
+  host, and neither HTTP client follows a redirect on its own.
 - **Hostile-input limits** — the site being crawled never gets to decide how
   much work its page costs. Response bodies, decompressed sitemaps, DevTools
   messages, robots.txt rules and wildcards, links taken off one page, and the
@@ -173,6 +176,8 @@ and a small AJAX front end to search it.
   a page reloading itself) without throttling everyone else behind the same
   address. Over budget answers `429` with `Retry-After`, and the search page
   says how long the wait is rather than reporting a generic failure.
+- **Bounded queries** — public search input is capped before it reaches
+  MariaDB, and invalid oversized input receives a clear `400` response.
 
 ### Operations
 
@@ -182,6 +187,12 @@ and a small AJAX front end to search it.
   the crawler's own run state. Nothing crosses between the two through the
   filesystem — they share a database, which is where the focused-crawl topic
   lives, so the web server needs no write access anywhere inside the project.
+- **Least-privilege database access** — the stored runtime identity has only
+  SELECT/INSERT/UPDATE/DELETE. Installation and schema migrations use a
+  separately supplied administrator identity that is never persisted.
+- **Contained services** — crawler and list-refresh units run with a read-only
+  system/home view, private devices and temporary storage, no privilege
+  escalation, a restrictive umask, and explicitly allowlisted writable paths.
 - **Hardened serving** — the site is HTTPS-only (plain HTTP just redirects,
   with HSTS), every page carries a Content Security Policy that only allows
   this origin's own scripts and styles (possible because Bootstrap is served
@@ -193,7 +204,8 @@ and a small AJAX front end to search it.
   a topic (ranking not-yet-crawled URLs by how on-topic the pages linking to
   them are), and a box to seed new URLs into the queue.
 - **`bin/backup.php`** — dumps the database and archives the thumbnails,
-  timestamped, keeping the last seven runs.
+  timestamped, keeping the last seven runs. `mysqldump` and `gzip` are checked
+  independently and an artifact is accepted only when it contains schema.
 - **`bin/test.php`** — a dependency-free test suite over the pure logic (URL
   parsing/resolution, robots.txt matching, HTML extraction, address
   classification, public-suffix handling, text handling).
@@ -202,9 +214,9 @@ and a small AJAX front end to search it.
   Suffix List. Installed as a systemd timer that runs weekly, so neither the
   crawler nor a search request ever has to stop and fetch one.
 - **`bin/install.php`** — an idempotent installer that checks requirements,
-  writes `.env` (including hashing the login password), provisions the
-  database and schema, and prints the manual (root-only) steps for the Apache
-  vhost, the crawler systemd service, and the weekly list-refresh timer.
+  writes `.env` using non-echoed/generated credentials, provisions a
+  least-privilege database identity, applies schema through a separate admin
+  connection, and prints the manual root-only steps for Apache and systemd.
 - **`bin/normalize-urls.php`** — re-normalizes stored URLs against the current
   canonicalization rules and merges the rows that turn out to be the same
   resource. Reports and changes nothing without `--apply`.

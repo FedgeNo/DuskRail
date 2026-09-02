@@ -19,13 +19,18 @@ class Auth
     private const AUTHENTICATED_KEY = 'authenticated';
     private const CSRF_TOKEN_KEY = 'csrfToken';
 
-    // Sent by watch.js on every state-changing request, read back here. A
-    // header rather than a form field because a cross-origin form post can't
-    // set custom headers at all without passing a CORS preflight first.
+    // Sent by watch.js on every state-changing JSON request. A header rather
+    // than a form field means a cross-origin form cannot imitate an API write;
+    // ordinary forms such as logout carry the same token in _csrf instead.
     private const CSRF_HEADER = 'HTTP_X_CSRF_TOKEN';
+    private static ?bool $authenticationResult = null;
 
     public static function isAuthenticated(): bool
     {
+        if (self::$authenticationResult !== null) {
+            return self::$authenticationResult;
+        }
+
         // A request with no session cookie cannot be signed in, so there's
         // nothing to read and no reason to start a session to find that out.
         // This is the common path now that the search side is public: without
@@ -33,12 +38,24 @@ class Auth
         // id and leaves a session file behind on the server - unbounded
         // state, created by anyone, from an endpoint that asks for nothing.
         if (session_status() !== PHP_SESSION_ACTIVE && !isset($_COOKIE[session_name()])) {
-            return false;
+            return self::$authenticationResult = false;
         }
 
-        self::startSession();
+        if (!self::startSession()) {
+            return self::$authenticationResult = false;
+        }
 
-        return ($_SESSION[self::AUTHENTICATED_KEY] ?? false) === true;
+        $authenticated = ($_SESSION[self::AUTHENTICATED_KEY] ?? false) === true;
+
+        if (!$authenticated) {
+            // An arbitrary cookie must not leave a new session file or a
+            // replacement session id behind. Strict mode may mint a fresh id
+            // for an unknown one, so explicitly destroy anonymous state and
+            // expire whatever cookie PHP was about to return.
+            self::discardSession();
+        }
+
+        return self::$authenticationResult = $authenticated;
     }
 
     /**
@@ -55,7 +72,9 @@ class Auth
             return false;
         }
 
-        self::startSession();
+        if (!self::startSession()) {
+            return false;
+        }
 
         // The pre-login session id is known to whoever handed the visitor this
         // page; re-issuing it here means the id that ends up carrying the
@@ -63,6 +82,7 @@ class Auth
         session_regenerate_id(true);
 
         $_SESSION[self::AUTHENTICATED_KEY] = true;
+        self::$authenticationResult = true;
 
         return true;
     }
@@ -72,7 +92,8 @@ class Auth
         self::startSession();
 
         $_SESSION = [];
-        session_destroy();
+        self::discardSession();
+        self::$authenticationResult = false;
     }
 
     /**
@@ -120,6 +141,18 @@ class Auth
         }
     }
 
+    /** Require an authenticated, CSRF-protected ordinary form submission. */
+    public static function requireWritePage(): void
+    {
+        self::requirePage();
+
+        if (!hash_equals(self::csrfToken(), (string) ($_POST['_csrf'] ?? ''))) {
+            http_response_code(403);
+            echo 'Invalid CSRF token.';
+            exit;
+        }
+    }
+
     /**
      * This session's CSRF token, minted on first use and stable for the rest
      * of the session so a page rendered once keeps working.
@@ -138,10 +171,10 @@ class Auth
      * (samesite), and HTTPS-only whenever the request itself arrived over
      * HTTPS.
      */
-    private static function startSession(): void
+    private static function startSession(): bool
     {
         if (session_status() === PHP_SESSION_ACTIVE) {
-            return;
+            return true;
         }
 
         // Both calls below need the response headers still open. Every gate
@@ -149,8 +182,12 @@ class Auth
         // when something has gone wrong further up - and warning twice about
         // headers, on a request that's already broken, helps nobody.
         if (headers_sent()) {
-            return;
+            return false;
         }
+
+        ini_set('session.use_strict_mode', '1');
+        ini_set('session.use_only_cookies', '1');
+        ini_set('session.use_trans_sid', '0');
 
         session_set_cookie_params([
             'httponly' => true,
@@ -158,6 +195,29 @@ class Auth
             'secure' => ($_SERVER['HTTPS'] ?? '') !== '',
         ]);
 
-        session_start();
+        return session_start();
+    }
+
+    /** Destroy server state and expire the browser cookie with matching scope. */
+    private static function discardSession(): void
+    {
+        if (session_status() === PHP_SESSION_ACTIVE) {
+            $_SESSION = [];
+            session_destroy();
+        }
+
+        if (headers_sent()) {
+            return;
+        }
+
+        $params = session_get_cookie_params();
+        setcookie(session_name(), '', [
+            'expires' => time() - 3600,
+            'path' => $params['path'],
+            'domain' => $params['domain'],
+            'secure' => $params['secure'],
+            'httponly' => $params['httponly'],
+            'samesite' => $params['samesite'] ?? 'Lax',
+        ]);
     }
 }

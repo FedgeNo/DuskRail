@@ -102,6 +102,30 @@ function prompt_secret(string $question): string
     return $answer;
 }
 
+/** A non-echoed or generated application DB password for a fresh .env. */
+function prompt_database_password(): string
+{
+    $supplied = (string) getenv('DUSKRAIL_DB_PASSWORD');
+
+    if ($supplied !== '') {
+        return $supplied;
+    }
+
+    if (!is_interactive()) {
+        fail('Set DUSKRAIL_DB_PASSWORD for a non-interactive installation.');
+    }
+
+    $password = prompt_secret('Database password (blank to generate one)');
+
+    if ($password !== '') {
+        return $password;
+    }
+
+    ok('Generated a random database password');
+
+    return bin2hex(random_bytes(32));
+}
+
 /**
  * Sets KEY=value in an existing .env: fills in the line if the key is already
  * there (which is what a key present but blank looks like), appends it if it
@@ -166,7 +190,7 @@ if (version_compare(PHP_VERSION, '8.1', '<')) {
 }
 ok('PHP ' . PHP_VERSION);
 
-foreach (['mysqli', 'gd', 'mbstring', 'curl', 'dom'] as $extension) {
+foreach (['mysqli', 'gd', 'mbstring', 'curl', 'dom', 'pcntl'] as $extension) {
     if (!extension_loaded($extension)) {
         fail('Missing required PHP extension: ' . $extension);
     }
@@ -257,9 +281,11 @@ if (is_file($env_path)) {
     foreach ($defaults as $key => $default) {
         // Never written from a prompt's plain answer - the file stores a hash,
         // and the password itself must not end up on disk anywhere.
-        $value = $key === 'AUTH_PASSWORD_HASH'
-            ? prompt_password_hash()
-            : (isset($prompts[$key]) ? prompt($prompts[$key], $default) : $default);
+        $value = match ($key) {
+            'AUTH_PASSWORD_HASH' => prompt_password_hash(),
+            'DB_PASSWORD' => prompt_database_password(),
+            default => isset($prompts[$key]) ? prompt($prompts[$key], $default) : $default,
+        };
 
         $lines[] = $key . '=' . $value;
     }
@@ -316,6 +342,16 @@ heading('Checking database');
 
 $config = require ROOT_DIR . '/src/config.php';
 
+$runtime_password_was_generated = $config['password'] === '' || $config['password'] === 'change-me';
+
+if ($runtime_password_was_generated) {
+    // Heal installations made with the historical public default without
+    // ever printing the replacement. It is written only after ALTER USER
+    // succeeds, so an interrupted installer cannot desynchronise .env from
+    // MariaDB.
+    $config['password'] = bin2hex(random_bytes(32));
+}
+
 // A database/user name gets backtick-interpolated into DDL below (MySQL
 // never accepts a placeholder for an identifier) - validated up front so
 // that interpolation is safe rather than trusting .env not to contain
@@ -323,71 +359,73 @@ $config = require ROOT_DIR . '/src/config.php';
 $database_name = validate_identifier($config['database'], 'DB_DATABASE');
 $database_user = validate_identifier($config['username'], 'DB_USERNAME');
 
+$admin_user = (string) getenv('DUSKRAIL_DB_ADMIN_USERNAME');
+
+if ($admin_user === '') {
+    $admin_user = prompt('MariaDB migration/admin username', 'root');
+}
+
+$admin_pass_environment = getenv('DUSKRAIL_DB_ADMIN_PASSWORD');
+$admin_pass = $admin_pass_environment === false
+    ? prompt_secret('MariaDB migration/admin password')
+    : (string) $admin_pass_environment;
+
+$admin_host_environment = getenv('DUSKRAIL_DB_ADMIN_HOST');
+$admin_host = $admin_host_environment === false || $admin_host_environment === ''
+    ? ($config['host'] === '127.0.0.1' ? 'localhost' : $config['host'])
+    : (string) $admin_host_environment;
+
 mysqli_report(MYSQLI_REPORT_OFF);
+$admin_connection = mysqli_connect($admin_host, $admin_user, $admin_pass, '', $config['port']);
 
-$connection = mysqli_connect(
-    $config['host'],
-    $config['username'],
-    $config['password'],
-    '',
-    $config['port']
-);
+if ($admin_connection === false) {
+    fail('Could not connect with the migration/admin identity. Schema work is never run through the runtime account.');
+}
 
-if ($connection !== false) {
-    // SHOW ... LIKE ? refuses to prepare at all on MariaDB/MySQL (confirmed
-    // directly - mysqli_prepare() returns false, "error near '?'") - real
-    // escaping is the only option for this specific statement shape, unlike
-    // every SELECT/INSERT/UPDATE elsewhere in this project.
-    $exists = mysqli_query($connection, '
-SHOW DATABASES LIKE \'' . mysqli_real_escape_string($connection, $database_name) . '\'
-');
+$escaped_runtime_user = mysqli_real_escape_string($admin_connection, $database_user);
+$escaped_runtime_password = mysqli_real_escape_string($admin_connection, $config['password']);
 
-    if ($exists !== false && mysqli_num_rows($exists) > 0) {
-        ok('Database "' . $database_name . '" exists and credentials work');
-    } else {
-        mysqli_query($connection, '
-CREATE DATABASE `' . $database_name . '` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
-');
-        ok('Created database "' . $database_name . '"');
-    }
-
-    mysqli_close($connection);
-} else {
-    warn('Could not connect as "' . $database_user . '" - the database/user may not exist yet.');
-
-    $root_user = prompt('MariaDB root (or admin) username to create it', 'root');
-    $root_pass = prompt('MariaDB root (or admin) password', '');
-
-    $root_connection = mysqli_connect($config['host'], $root_user, $root_pass, '', $config['port']);
-
-    if ($root_connection === false) {
-        fail('Could not connect as "' . $root_user . '" either. Create the database/user manually and re-run this script.');
-    }
-
-    // CREATE USER/GRANT can't be prepared statements either (MySQL's
-    // prepared-statement protocol doesn't support them at all, placeholders
-    // or not) - mysqli_real_escape_string() on each value is the correct
-    // substitute here, same as CREATE DATABASE/GRANT's backtick-quoted
-    // identifier relies on validate_identifier() above instead of escaping.
-    mysqli_query($root_connection, '
+mysqli_query($admin_connection, '
 CREATE DATABASE IF NOT EXISTS `' . $database_name . '` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
 ');
 
-    mysqli_query($root_connection, '
-CREATE USER IF NOT EXISTS \'' . mysqli_real_escape_string($root_connection, $database_user) . '\'@\'' . mysqli_real_escape_string($root_connection, $config['host']) . '\' IDENTIFIED BY \'' . mysqli_real_escape_string($root_connection, $config['password']) . '\'
-');
+$runtime_hosts = [$config['host']];
 
-    mysqli_query($root_connection, '
-GRANT ALL PRIVILEGES ON `' . $database_name . '`.* TO \'' . mysqli_real_escape_string($root_connection, $database_user) . '\'@\'' . mysqli_real_escape_string($root_connection, $config['host']) . '\'
-');
-
-    mysqli_query($root_connection, '
-FLUSH PRIVILEGES
-');
-    mysqli_close($root_connection);
-
-    ok('Created database "' . $database_name . '" and user "' . $database_user . '"');
+// MariaDB distinguishes these account spellings even though both reach the
+// same local server. Heal either spelling left by an older installation so a
+// retired password or historical ALL PRIVILEGES grant cannot survive beside
+// the account the current configuration happens to select.
+if (in_array($config['host'], ['127.0.0.1', 'localhost', '::1'], true)) {
+    $runtime_hosts = ['127.0.0.1', 'localhost'];
 }
+
+foreach ($runtime_hosts as $runtime_host) {
+    $escaped_runtime_host = mysqli_real_escape_string($admin_connection, $runtime_host);
+    $runtime_account = '\'' . $escaped_runtime_user . '\'@\'' . $escaped_runtime_host . '\'';
+
+    mysqli_query($admin_connection, '
+CREATE USER IF NOT EXISTS ' . $runtime_account . ' IDENTIFIED BY \'' . $escaped_runtime_password . '\'
+');
+    mysqli_query($admin_connection, '
+ALTER USER ' . $runtime_account . ' IDENTIFIED BY \'' . $escaped_runtime_password . '\'
+');
+    // Idempotently remove historical ALL PRIVILEGES grants before installing
+    // the deliberately small runtime set. Schema creation and migrations
+    // continue on the admin connection below.
+    mysqli_query($admin_connection, 'REVOKE ALL PRIVILEGES, GRANT OPTION FROM ' . $runtime_account);
+    mysqli_query($admin_connection, '
+GRANT SELECT, INSERT, UPDATE, DELETE ON `' . $database_name . '`.* TO ' . $runtime_account . '
+');
+}
+mysqli_select_db($admin_connection, $database_name);
+Database::useConnection($admin_connection);
+
+if ($runtime_password_was_generated) {
+    set_env_line($env_path, 'DB_PASSWORD', $config['password']);
+    ok('Rotated the retired database password and updated .env');
+}
+
+ok('Database and least-privilege runtime account are ready; migrations use "' . $admin_user . '" only');
 
 // mysqli_report() is a script-wide setting, not scoped to the $connection
 // above - restored to PHP's own default here so the schema-delta code below
@@ -1143,8 +1181,16 @@ sudo useradd --system --no-create-home --home-dir /var/lib/{$service_user} --she
 # makes files the crawler creates later inherit the same access, rather than
 # only the directories that exist right now having it.
 sudo chown -R {$service_user}: {$root}/thumbnails {$root}/data {$var_dir}
-sudo chmod 755 {$root}/thumbnails {$root}/data {$var_dir}
+sudo chmod 755 {$root}/thumbnails {$root}/data
+sudo chmod 700 {$var_dir}
 sudo setfacl -R -m u:{$owner}:rwX -m d:u:{$owner}:rwX {$root}/thumbnails {$root}/data {$var_dir}
+# The endpoint controls the whole shared browser. It is never public state and
+# must not be readable by unrelated local accounts.
+sudo touch {$var_dir}/chrome-devtools-endpoint
+sudo chown {$owner}:{$owner} {$var_dir}/chrome-devtools-endpoint
+sudo setfacl -b {$var_dir}/chrome-devtools-endpoint
+sudo chmod 600 {$var_dir}/chrome-devtools-endpoint
+sudo setfacl -m u:{$service_user}:rw {$var_dir}/chrome-devtools-endpoint
 
 # .env holds the database credentials and the login hash. Owned by the person
 # who edits it, read by the two services that need it, and by nobody else -
@@ -1364,6 +1410,15 @@ Environment=HOME=%S/{$service_user}
 # Each browser profile goes in a temp directory of its own; this keeps them
 # out of the shared /tmp and takes them with the service when it stops.
 PrivateTmp=true
+# Hostile pages and native parsers run here. Give a compromise no privilege
+# escalation path, no device access, and no writable view of the host outside
+# the exact crawler data directories and systemd-managed state/home.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateDevices=true
+UMask=0077
+ReadWritePaths={$root}/thumbnails {$root}/data {$var_dir}
 # systemd hands services a 1024 soft file-descriptor limit and expects a
 # daemon needing more to raise it itself. Chrome does not, and a browser
 # driving several tabs over TLS exhausts 1024 easily - at which point requests
@@ -1403,6 +1458,13 @@ User={$service_user}
 Group={$service_user}
 WorkingDirectory={$root}
 ExecStart={$php_binary} {$root}/bin/refresh-lists.php
+PrivateTmp=true
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateDevices=true
+UMask=0077
+ReadWritePaths={$root}/data
 EOF
 
 sudo tee /etc/systemd/system/duskrail-refresh-lists.timer > /dev/null <<'EOF'

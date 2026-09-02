@@ -35,8 +35,8 @@ class HTTPConnection
     private const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
         . '(KHTML, like Gecko) Chrome/' . self::CHROME_VERSION . '.0.0.0 Safari/537.36';
 
-    private \CurlMultiHandle $multiHandle;
-    private \CurlHandle $easyHandle;
+    private ?\CurlMultiHandle $multiHandle = null;
+    private ?\CurlHandle $easyHandle = null;
     private bool $headersComplete = false;
 
     public ?int $statusCode = null;
@@ -47,11 +47,35 @@ class HTTPConnection
 
     public function __construct(URL $url)
     {
+        $addresses = IPAddress::publicAddressesFor($url -> host);
+
+        // Resolution failure and a private/mixed answer set are both a
+        // connection that must never be attempted. Keep the ordinary
+        // statusCode=null interface callers already use for unreachable
+        // hosts, while leaving no half-initialised curl handles behind.
+        if ($addresses === []) {
+            $this -> bodyRead = true;
+
+            return;
+        }
+
+        $curlAddresses = array_map(
+            static fn (string $address): string => str_contains($address, ':') ? '[' . $address . ']' : $address,
+            $addresses
+        );
+
         $this -> easyHandle = curl_init();
 
         curl_setopt_array($this -> easyHandle, [
             CURLOPT_URL => $url -> toString(),
             CURLOPT_PORT => $url -> port,
+            // Connect to the exact answer set IPAddress approved while curl
+            // keeps the original hostname for the Host header, TLS SNI, and
+            // certificate verification. No second DNS lookup can rebind the
+            // request to a different machine after the policy check.
+            CURLOPT_RESOLVE => [
+                $url -> host . ':' . $url -> port . ':' . implode(',', $curlAddresses),
+            ],
             CURLOPT_HTTPGET => true,
             // Redirects are never followed automatically. A Location header
             // is chosen entirely by the host being fetched, and following one

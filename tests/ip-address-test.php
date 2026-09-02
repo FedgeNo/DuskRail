@@ -50,3 +50,8 @@ assert_false('garbage refused', IPAddress::isPubliclyRoutable('not an ip'));
 assert_false('empty string refused', IPAddress::isPubliclyRoutable(''));
 assert_false('out-of-range octet refused', IPAddress::isPubliclyRoutable('999.1.1.1'));
 assert_false('hostname refused', IPAddress::isPubliclyRoutable('example.com'));
+
+// Resolution is fail-closed: an empty answer and a private answer are not a
+// Boolean "nothing objected" success that a later DNS lookup may change.
+assert_same('empty hostname has no approved addresses', [], IPAddress::publicAddressesFor(''));
+assert_same('localhost has no approved addresses', [], IPAddress::publicAddressesFor('localhost'));
