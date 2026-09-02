@@ -264,6 +264,10 @@
         }
     });
 
+    window.addEventListener('load', function () {
+        window.scrollTo(0, document.documentElement.scrollHeight);
+    });
+
     /**
      * Whether the feed is scrolled to (or within a row's height of) the
      * bottom. The tolerance matters: scrollTop is fractional on a zoomed or
