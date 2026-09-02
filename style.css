@@ -7,6 +7,10 @@ body {
        bit of every page's content. */
     padding-top: 56px;
 }
+a,
+a:hover {
+    color: #00ff00;
+}
 
 /* Bootstrap's plain .navbar has no horizontal padding of its own (that's
    normally a .container's job) - this lines the nav brand up with the page
@@ -23,13 +27,13 @@ body {
     margin-right: auto;
 }
 .NavLink {
-    color: #adb5bd;
+    color: #00ff00;
     font-size: 0.9rem;
     text-decoration: none;
 }
 .NavLink:hover,
 .NavLink:focus-visible {
-    color: #7fbf7f;
+    color: #00ff00;
 }
 .NavLogoutForm {
     margin: 0;
@@ -144,7 +148,7 @@ input:focus-visible,
     flex-shrink: 0;
 }
 .SearchResultTitle {
-    color: #7fbf7f;
+    color: #00ff00;
     overflow-wrap: break-word;
 }
 .SearchResultDescription {
@@ -152,7 +156,7 @@ input:focus-visible,
 }
 .SearchResultURL {
     font-size: 0.85rem;
-    color: #7fbf7f;
+    color: #00ff00;
     overflow-wrap: break-word;
 }
 .ImageGrid {
@@ -183,7 +187,7 @@ input:focus-visible,
 .ImageTileURL {
     margin-top: 0.35rem;
     font-size: 0.75rem;
-    color: #7fbf7f;
+    color: #00ff00;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -235,12 +239,12 @@ input:focus-visible,
     overflow-wrap: break-word;
 }
 .PreviewParent a {
-    color: #7fbf7f;
+    color: #00ff00;
 }
 .PreviewImageLink {
     display: inline-block;
     font-size: 0.85rem;
-    color: #7fbf7f;
+    color: #00ff00;
 }
 
 /* watch.php - crawl feed page */
@@ -284,6 +288,9 @@ input:focus-visible,
 }
 .CrawlerStatus.Stopped {
     color: #ff8f8f;
+}
+.CrawlFeedTitleLink {
+    color: #00ff00;
 }
 #feed {
     height: 80vh;

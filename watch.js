@@ -63,7 +63,7 @@
         titleLink.href = this.item.url;
         titleLink.target = '_blank';
         titleLink.rel = 'noopener noreferrer';
-        titleLink.className = 'link-light';
+        titleLink.setAttribute('class', 'CrawlFeedTitleLink');
         titleLink.textContent = this.item.title || this.item.url;
         titleLine.appendChild(titleLink);
 
