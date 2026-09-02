@@ -1,9 +1,9 @@
 # DuskRail
 
 A search engine — web crawler, index, and search interface — built from the
-ground up in PHP. No search framework, no Elasticsearch, no Composer: just a
-crawler that fetches and parses the open web, a MariaDB/MySQL FULLTEXT index,
-and a small AJAX front end to search it.
+ground up in PHP. No web framework, Elasticsearch, or Composer: a crawler
+that fetches and parses the open web, Manticore Search for the derived
+full-text index, MariaDB for authoritative data, and a small AJAX front end.
 
 ## What it does
 
@@ -11,10 +11,10 @@ and a small AJAX front end to search it.
   links and images on each page and the sites' own sitemaps, fetching through
   a real, shared headless Chrome instance so requests are genuinely
   indistinguishable from an ordinary browser's.
-- **Indexes** each page's title, description, keywords, and full body text —
-  HTML, PDFs, and plain text alike — plus a thumbnail for every image it
-  finds.
-- **Searches** that index with FULLTEXT ranking, over both pages and images,
+- **Indexes** each page's title, description, and full body text — HTML,
+  PDFs, and plain text alike — plus a thumbnail for every image it finds.
+  Keywords are retained as metadata but do not influence search ranking.
+- **Searches** that index with Manticore ranking, over both pages and images,
   through a web UI with match snippets, infinite scroll, and an image preview
   panel.
 
@@ -131,7 +131,8 @@ and a small AJAX front end to search it.
 
 ### Search
 
-- **FULLTEXT ranking** — `MATCH … AGAINST`, ranked first by how many distinct
+- **Full-text ranking** — Manticore ranks a bounded content pool, then results
+  are ranked first by how many distinct
   *registrable domains* link to a result using matching anchor text (an
   external relevance signal that ten links from one site can't inflate), then
   by direct content relevance, then by how often the URL is linked at all.
@@ -141,8 +142,10 @@ and a small AJAX front end to search it.
   "independent" endorsement as you liked. Registering a domain is the step
   that costs money, so that's the unit counted. Retrieval is two-stage — link
   ranking runs over a bounded pool of the top matches by content relevance —
-  so a broad query costs the same at millions of indexed pages as at
-  thousands.
+  so link reranking costs the same at millions of indexed pages as at
+  thousands. Only searchable text and ranking attributes are copied into
+  Manticore; result URLs and display fields are hydrated from MariaDB by
+  primary key after the final page is selected.
 - **Ranking integrity** — every ranking input is written by the page being
   ranked, so each is bounded by what it costs to fake. A page's own domain
   doesn't count toward its link signal (four out of five links in a real
@@ -150,10 +153,9 @@ and a small AJAX front end to search it.
   The `keywords` meta tag is not indexed — it's the one field no reader ever
   sees, so nothing in it has to be true. The popularity counter counts
   distinct linking *pages*, not mentions, so repeating a link or being
-  recrawled adds nothing. And because MariaDB's relevance is exactly linear
-  in term frequency — 500 repetitions really do score 500× — the number of
-  times one word counts toward a page's relevance is capped, at a level a
-  thorough honest page reaches anyway.
+  recrawled adds nothing. The number of times one word is stored for indexing
+  remains capped, limiting both stuffing and index growth before Manticore
+  tokenizes it.
 - **Snippets** — each result shows the text around where the query actually
   matched, with the terms highlighted, rather than the first lines of a
   description that may not contain the match at all.
@@ -177,7 +179,7 @@ and a small AJAX front end to search it.
   address. Over budget answers `429` with `Retry-After`, and the search page
   says how long the wait is rather than reporting a generic failure.
 - **Bounded queries** — public search input is capped before it reaches
-  MariaDB, and invalid oversized input receives a clear `400` response.
+  Manticore, and invalid oversized input receives a clear `400` response.
 
 ### Operations
 
@@ -190,6 +192,9 @@ and a small AJAX front end to search it.
 - **Least-privilege database access** — the stored runtime identity has only
   SELECT/INSERT/UPDATE/DELETE. Installation and schema migrations use a
   separately supplied administrator identity that is never persisted.
+- **Shared search service** — Manticore is one system-wide service shared by
+  applications. DuskRail uses its own credentials, restricted to
+  `duskrail_*`, and neither owns nor manages the daemon.
 - **Contained services** — crawler and list-refresh units run with a read-only
   system/home view, private devices and temporary storage, no privilege
   escalation, a restrictive umask, and explicitly allowlisted writable paths.
@@ -230,9 +235,11 @@ and a small AJAX front end to search it.
 - **PHP 8.1+** — almost the entire project. A custom autoloader maps flat class
   names to `src/classes/ClassName.php`; no Composer/PSR-4.
 - **MariaDB / MySQL** — accessed via `mysqli` with prepared statements
-  throughout; FULLTEXT indexes for search. Every hot query is index-driven
-  and designed for a multi-million-row index — nothing scans or sorts a whole
+  throughout as the authoritative store. Every hot query is index-driven and
+  designed for a multi-million-row catalogue — nothing scans or sorts a whole
   table per request.
+- **Manticore Search** — the shared system service holds only DuskRail's
+  derived searchable documents, anchor text, and ranking attributes.
 - **A real headless Chrome/Chromium instance** — driven directly over its
   DevTools Protocol (a hand-rolled WebSocket client, not a package) for every
   real page/image fetch and for resolving JS bot challenges.
@@ -247,6 +254,8 @@ and a small AJAX front end to search it.
 - PHP 8.1+ with the `mysqli`, `gd`, `mbstring`, `curl`, and `dom` extensions
   (`ext-posix` is optional — shell fallbacks cover machines without it)
 - MariaDB or MySQL
+- A system-wide Manticore Search service with a least-privilege application
+  user that can read, write, and create only `duskrail_*` tables
 - A Chrome or Chromium binary on `$PATH` (`chromium-browser`, `google-chrome`,
   `chromium`, or `google-chrome-stable` are auto-detected; set `CHROME_BINARY`
   in `.env` if it's installed under another name). The crawler doesn't
@@ -265,9 +274,10 @@ php bin/install.php
 
 The installer checks the PHP environment (including whether a Chrome/Chromium
 binary is on `$PATH`), writes `.env` (from `.env.example`'s defaults, or your
-answers when run interactively), creates the database and schema, warms the
-TLD list, and prints the remaining manual steps that need root — the Apache
-vhost and the optional `duskrail-crawler` systemd service.
+answers when run interactively), creates the MariaDB and DuskRail-owned
+Manticore schemas, warms the TLD list, and prints the remaining manual steps
+that need root — the Apache vhost and systemd units. It does not install,
+configure, start, or administer the shared Manticore service.
 
 Run it interactively at least once: it asks for the operator password that the
 crawl controls sit behind and stores only its hash. Searching works without it;
@@ -275,9 +285,15 @@ until it's set, nobody can sign in to run the crawl — that's deliberate, since
 the alternative for an install that skipped it would be letting everybody in.
 
 Configuration lives in `.env` (gitignored); see `.env.example` for the keys —
-notably `WORKER_COUNT`, and `CHROME_BINARY`, which only needs setting if none
-of the auto-detected binary names match what's installed. A `WORKER_COUNT`
-change takes effect the next time the crawler manager starts.
+notably the application-specific `MANTICORE_USERNAME` and
+`MANTICORE_PASSWORD`, `WORKER_COUNT`, and `CHROME_BINARY`, which only needs
+setting if none of the auto-detected binary names match what's installed. A
+`WORKER_COUNT` change takes effect the next time the crawler manager starts.
+
+When upgrading an installation that already has crawled data, run
+`php bin/rebuild-search-index.php` once after the installer creates the
+Manticore tables. The backfill is resumable and copies only presentable,
+searchable items; uncrawled catalogue rows remain solely in MariaDB.
 
 ## Usage
 
@@ -331,11 +347,16 @@ bin/install.php         installer / requirements checker
 bin/crawler.php         crawls one item, then exits
 bin/crawler-manager.php supervisor: owns the shared Chrome instance, runs
                         WORKER_COUNT concurrent workers
+bin/rebuild-search-index.php
+                        resumable MariaDB-to-Manticore backfill
+bin/sync-search-index.php
+                        one-shot durable search-index queue drain
 bin/refresh-lists.php   weekly download of the IANA TLD and Public Suffix
                         lists (systemd timer)
 bin/normalize-urls.php  re-normalizes and de-duplicates stored URLs
 bin/reextract-text.php  re-runs text extraction over stored page HTML
 bin/backup.php          timestamped DB dump + thumbnail archive, rotated
+manticore-schema.sql    DuskRail-owned tables in the shared search service
 bin/test.php            test runner over tests/
 tests/                  dependency-free tests for the pure logic
 var/                    the running crawler's state files (gitignored)

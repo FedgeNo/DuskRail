@@ -18,8 +18,14 @@ if (mb_strlen($query, 'UTF-8') > SearchResults::MAX_QUERY_LENGTH) {
     exit;
 }
 
-echo json_encode((new SearchResults(
-    $query,
-    (string) ($_GET['type'] ?? 'html'),
-    (int) ($_GET['offset'] ?? 0)
-)) -> toJSON());
+try {
+    echo json_encode((new SearchResults(
+        $query,
+        (string) ($_GET['type'] ?? 'html'),
+        (int) ($_GET['offset'] ?? 0)
+    )) -> toJSON());
+} catch (SearchIndexUnavailable $exception) {
+    error_log($exception -> getMessage());
+    http_response_code(503);
+    echo json_encode(['error' => 'search is temporarily unavailable']);
+}

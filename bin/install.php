@@ -126,6 +126,28 @@ function prompt_database_password(): string
     return bin2hex(random_bytes(32));
 }
 
+/** The password for DuskRail's pre-provisioned Manticore application user. */
+function prompt_manticore_password(): string
+{
+    $supplied = (string) getenv('DUSKRAIL_MANTICORE_PASSWORD');
+
+    if ($supplied !== '') {
+        return $supplied;
+    }
+
+    if (!is_interactive()) {
+        fail('Set DUSKRAIL_MANTICORE_PASSWORD for a non-interactive installation.');
+    }
+
+    $password = prompt_secret('Manticore application password');
+
+    if ($password === '') {
+        fail('Manticore application credentials are required. Provision a least-privilege user for duskrail_* in the shared service first.');
+    }
+
+    return $password;
+}
+
 /**
  * Sets KEY=value in an existing .env: fills in the line if the key is already
  * there (which is what a key present but blank looks like), appends it if it
@@ -275,6 +297,9 @@ if (is_file($env_path)) {
         'DB_DATABASE' => 'Database name',
         'DB_USERNAME' => 'Database username',
         'DB_PASSWORD' => 'Database password',
+        'MANTICORE_HOST' => 'Manticore host',
+        'MANTICORE_PORT' => 'Manticore port',
+        'MANTICORE_USERNAME' => 'Manticore application username',
     ];
 
     $lines = [];
@@ -284,6 +309,7 @@ if (is_file($env_path)) {
         $value = match ($key) {
             'AUTH_PASSWORD_HASH' => prompt_password_hash(),
             'DB_PASSWORD' => prompt_database_password(),
+            'MANTICORE_PASSWORD' => prompt_manticore_password(),
             default => isset($prompts[$key]) ? prompt($prompts[$key], $default) : $default,
         };
 
@@ -549,8 +575,7 @@ CREATE TABLE `Items` (
   `keywords` varchar(255) DEFAULT NULL,
   `fullText` longtext DEFAULT NULL,
   `fullHTML` longtext DEFAULT NULL,
-  PRIMARY KEY (`itemId`),
-  FULLTEXT KEY `title_description_keywords_fullText` (`title`,`description`,`keywords`,`fullText`)
+  PRIMARY KEY (`itemId`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci');
 
                 run_sql('
@@ -577,6 +602,21 @@ ALTER TABLE `Items`
             },
         ],
         [
+            'name' => 'create_search_index_queue',
+            'check' => fn () => table_exists('SearchIndexQueue'),
+            'apply' => function (): void {
+                run_sql('
+CREATE TABLE `SearchIndexQueue` (
+  `itemId` int(10) unsigned NOT NULL,
+  `syncItem` tinyint(1) unsigned NOT NULL DEFAULT 0,
+  `syncLinks` tinyint(1) unsigned NOT NULL DEFAULT 0,
+  `generation` int(10) unsigned NOT NULL DEFAULT 1,
+  PRIMARY KEY (`itemId`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+');
+            },
+        ],
+        [
             'name' => 'add_crawledtime_to_items',
             'check' => fn () => column_exists('Items', 'crawledTime'),
             'apply' => function (): void {
@@ -593,16 +633,6 @@ ALTER TABLE `Items`
                 run_sql('
 ALTER TABLE `Items`
     ADD COLUMN `inc` int(10) unsigned NOT NULL DEFAULT 1
-');
-            },
-        ],
-        [
-            'name' => 'add_fulltext_to_links_description',
-            'check' => fn () => index_exists('Links', 'description'),
-            'apply' => function (): void {
-                run_sql('
-ALTER TABLE `Links`
-    ADD FULLTEXT KEY `description` (`description`)
 ');
             },
         ],
@@ -1010,24 +1040,6 @@ ALTER TABLE `Items`
             },
         ],
         [
-            // The meta keywords tag carried the same weight in relevance as
-            // the page's actual text. It is the one indexed field a page
-            // author writes purely for search engines: nobody reading the
-            // page ever sees it, so nothing about it has to be true, which is
-            // exactly why every major engine stopped counting it decades ago.
-            // The column stays (it costs nothing and is still worth showing);
-            // it just no longer votes on what a page is about.
-            'name' => 'drop_keywords_from_items_fulltext',
-            'check' => fn () => index_exists('Items', 'title_description_fullText'),
-            'apply' => function (): void {
-                run_sql('
-ALTER TABLE `Items`
-    DROP KEY `title_description_keywords_fullText`,
-    ADD FULLTEXT KEY `title_description_fullText` (`title`, `description`, `fullText`)
-');
-            },
-        ],
-        [
             // Items.inc means "how many distinct pages link here". A row
             // carrying a count of every mention instead reflects one page
             // repeating a link and every recrawl of it - hundreds off a
@@ -1101,6 +1113,20 @@ INSERT INTO `Migrations` (`name`)
         fail('Failed to record migration "' . $name . '": ' . mysqli_error($connection));
     }
 }
+
+// ---------- Search schema ----------
+//
+// The daemon and application identity are system concerns shared across
+// projects. DuskRail supplies and applies only its own table definitions.
+
+heading('Checking Manticore schema');
+
+if ($config['manticoreUsername'] === '' || $config['manticorePassword'] === '') {
+    fail('Set DuskRail\'s least-privilege MANTICORE_USERNAME and MANTICORE_PASSWORD in .env after provisioning that user in the shared service.');
+}
+
+SearchIndex::installSchema(ROOT_DIR . '/manticore-schema.sql');
+ok('DuskRail Manticore tables are ready');
 
 // ---------- Published lists ----------
 //
@@ -1496,6 +1522,48 @@ sudo systemctl daemon-reload
 # Left disabled (no boot-start) and stopped on purpose - drive it by hand:
 #   sudo systemctl start duskrail-crawler
 #   sudo systemctl stop duskrail-crawler     # graceful: workers finish first
+
+SHELL;
+
+// ---------- Search-index synchronization ----------
+
+heading('Search-index synchronization (run manually, needs sudo)');
+echo <<<SHELL
+# The worker performs one bounded queue drain and exits. The timer starts it
+# again, so an idle indexer never sits in a polling loop.
+sudo tee /etc/systemd/system/duskrail-search-index-sync.service > /dev/null <<'EOF'
+[Unit]
+Description=DuskRail search-index synchronization
+After=mariadb.service manticore.service
+
+[Service]
+Type=oneshot
+User={$service_user}
+Group={$service_user}
+WorkingDirectory={$root}
+ExecStart={$php_binary} {$root}/bin/sync-search-index.php
+PrivateTmp=true
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateDevices=true
+UMask=0077
+EOF
+
+sudo tee /etc/systemd/system/duskrail-search-index-sync.timer > /dev/null <<'EOF'
+[Unit]
+Description=Synchronize DuskRail's Manticore index
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=1min
+RandomizedDelaySec=10s
+
+[Install]
+WantedBy=timers.target
+EOF
+sudo systemctl daemon-reload
+sudo systemctl enable --now duskrail-search-index-sync.timer
 
 SHELL;
 

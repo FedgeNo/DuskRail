@@ -8,6 +8,10 @@ return [
     'database' => Env::get('DB_DATABASE', 'duskrail'),
     'username' => Env::get('DB_USERNAME', 'duskrail'),
     'password' => Env::get('DB_PASSWORD', ''),
+    'manticoreHost' => Env::get('MANTICORE_HOST', '127.0.0.1'),
+    'manticorePort' => (int) Env::get('MANTICORE_PORT', '9306'),
+    'manticoreUsername' => Env::get('MANTICORE_USERNAME', ''),
+    'manticorePassword' => Env::get('MANTICORE_PASSWORD', ''),
     'siteURL' => Env::get('SITE_URL', 'https://duskrail.localhost'),
     'siteTitle' => Env::get('SITE_TITLE', 'DuskRail'),
     // password_hash() output for the single operator login (see Auth) - what

@@ -100,8 +100,8 @@ class Item
      *
      * $topic turns this into a focused crawl: among not-yet-crawled items,
      * the one whose *discovery context* - the Links.description text of
-     * whichever page(s) linked to it - best matches $topic via FULLTEXT
-     * MATCH/AGAINST goes first, rather than whatever happened to be
+     * whichever page(s) linked to it - best matches $topic in Manticore goes
+     * first, rather than whatever happened to be
      * discovered earliest. An item can be linked from several parents with
      * different link text, so this takes the best-scoring one (MAX), not an
      * average - one strongly on-topic mention should outweigh several
@@ -249,8 +249,8 @@ SELECT `Items`.`itemId`, `Items`.`hostId`
 
     /**
      * The focused-crawl pick: among not-yet-crawled items, the one whose
-     * discovery context best matches the topic. Driven from the Links
-     * FULLTEXT index inward - only links whose text actually matches are
+     * discovery context best matches the topic. Driven from the Manticore
+     * link index inward - only links whose text actually matches are
      * grouped and scored, instead of every uncrawled item LEFT-JOINing its
      * whole link set just so non-matches could sort behind matches. An item
      * with no matching link at all is simply not this query's business:
@@ -259,26 +259,48 @@ SELECT `Items`.`itemId`, `Items`.`hostId`
      */
     private static function selectFocusedCandidateRow(string $topic): ?array
     {
+        try {
+            $candidates = LinkSearchIndex::focusedCandidates($topic, 10000);
+        } catch (SearchIndexUnavailable $exception) {
+            error_log('Focused search index unavailable: ' . $exception -> getMessage());
+
+            return null;
+        }
+
+        if ($candidates === []) {
+            return null;
+        }
+
+        $item_ids = array_keys($candidates);
+        $placeholders = implode(', ', array_fill(0, count($item_ids), '?'));
         $focused = mysqli_prepare(Database::connection(), '
-SELECT `Items`.`itemId`, `Items`.`hostId`
-    FROM (
-        SELECT `Links`.`childId`, MAX(MATCH(`Links`.`description`) AGAINST (?)) AS `score`
-            FROM `Links`
-            WHERE MATCH(`Links`.`description`) AGAINST (?)
-            GROUP BY `Links`.`childId`
-    ) AS `matches`
-    INNER JOIN `Items` ON `Items`.`itemId` = `matches`.`childId`
+SELECT `Items`.`itemId`, `Items`.`hostId`, `Items`.`claimedUntil`
+    FROM `Items`
     INNER JOIN `Hosts` ON `Hosts`.`hostId` = `Items`.`hostId`
-    WHERE `Items`.`crawledTime` IS NULL
+    WHERE `Items`.`itemId` IN (' . $placeholders . ')
+        AND `Items`.`crawledTime` IS NULL
         AND (`Hosts`.`nextCrawlTime` IS NULL OR `Hosts`.`nextCrawlTime` <= UNIX_TIMESTAMP())
         AND (`Items`.`claimedUntil` IS NULL OR `Items`.`claimedUntil` <= UNIX_TIMESTAMP())
-    ORDER BY (`Items`.`claimedUntil` IS NOT NULL) ASC, `matches`.`score` DESC, `Items`.`itemId` ASC
-    LIMIT 1
 ');
-        mysqli_stmt_bind_param($focused, 'ss', $topic, $topic);
+        mysqli_stmt_bind_param($focused, str_repeat('i', count($item_ids)), ...$item_ids);
         mysqli_stmt_execute($focused);
+        $eligible = [];
 
-        return mysqli_fetch_assoc(mysqli_stmt_get_result($focused));
+        foreach (mysqli_fetch_all(mysqli_stmt_get_result($focused), MYSQLI_ASSOC) as $row) {
+            $eligible[(int) $row['itemId']] = $row;
+        }
+
+        // Fresh candidates retain priority over an abandoned claim even
+        // when the abandoned item has the stronger anchor-text match.
+        foreach ([false, true] as $stalled) {
+            foreach ($item_ids as $item_id) {
+                if (isset($eligible[$item_id]) && ($eligible[$item_id]['claimedUntil'] !== null) === $stalled) {
+                    return $eligible[$item_id];
+                }
+            }
+        }
+
+        return null;
     }
 
     /**
@@ -645,6 +667,8 @@ UPDATE `Items`
             mysqli_stmt_bind_param($update, str_repeat('i', count($chunk)), ...$chunk);
             mysqli_stmt_execute($update);
         }
+
+        SearchIndexQueue::record($itemIds, true, false);
     }
 
     /**
@@ -716,6 +740,9 @@ UPDATE `Items`
         $this -> contentHash = $contentHash;
         $this -> recrawlAfterSeconds = $recrawlAfterSeconds;
         $this -> recrawlDueTime = $now + $recrawlAfterSeconds;
+
+        SearchIndexQueue::record([$this -> itemId], true, false);
+        SearchIndexQueue::processPending();
     }
 
     /**
@@ -763,6 +790,9 @@ DELETE FROM `Items`
         mysqli_stmt_bind_param($delete, 'i', $this -> itemId);
         mysqli_stmt_execute($delete);
 
+        SearchIndexQueue::record([$this -> itemId], true, true);
+        SearchIndexQueue::processPending();
+
         // The row is what points at the thumbnail; with it gone the file is
         // unreachable, and nothing else would ever come back for it. itemIds
         // are never reused (AUTO_INCREMENT), so this can't take out a file
@@ -808,6 +838,8 @@ UPDATE `Items`
 
             $this -> url = $newURLString;
             $this -> hostId = $newHostId;
+
+            SearchIndexQueue::record([$this -> itemId], false, true);
 
             return $this;
         } catch (\mysqli_sql_exception) {
@@ -866,6 +898,8 @@ INSERT IGNORE INTO `Links` (`parentId`, `childId`, `description`)
 ');
             mysqli_stmt_bind_param($moveOutbound, 'iii', $survivorId, $this -> itemId, $survivorId);
             mysqli_stmt_execute($moveOutbound);
+
+            SearchIndexQueue::record([$survivorId], false, true);
 
             $this -> delete();
 

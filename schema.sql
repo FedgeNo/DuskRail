@@ -44,7 +44,6 @@ CREATE TABLE `Items` (
   KEY `hostId_crawledTime_claimedUntil` (`hostId`,`crawledTime`,`claimedUntil`),
   KEY `crawledTime_itemId_type_noindex` (`crawledTime`,`itemId`,`type`,`noindex`),
   KEY `recrawlDueTime_claimedUntil_hostId` (`recrawlDueTime`,`claimedUntil`,`hostId`),
-  FULLTEXT KEY `title_description_fullText` (`title`,`description`,`fullText`),
   CONSTRAINT `Items_ibfk_1` FOREIGN KEY (`hostId`) REFERENCES `Hosts` (`hostId`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -54,9 +53,19 @@ CREATE TABLE `Links` (
   `description` varchar(255) DEFAULT NULL,
   PRIMARY KEY (`parentId`,`childId`),
   KEY `childId_parentId` (`childId`,`parentId`),
-  FULLTEXT KEY `description` (`description`),
   CONSTRAINT `Links_ibfk_1` FOREIGN KEY (`parentId`) REFERENCES `Items` (`itemId`) ON DELETE CASCADE,
   CONSTRAINT `Links_ibfk_2` FOREIGN KEY (`childId`) REFERENCES `Items` (`itemId`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Durable work left when a MariaDB mutation needs to be reflected in the
+-- derived Manticore indexes. No foreign key: deleting an Item is one of the
+-- events this table must retain long enough to deliver.
+CREATE TABLE `SearchIndexQueue` (
+  `itemId` int(10) unsigned NOT NULL,
+  `syncItem` tinyint(1) unsigned NOT NULL DEFAULT 0,
+  `syncLinks` tinyint(1) unsigned NOT NULL DEFAULT 0,
+  `generation` int(10) unsigned NOT NULL DEFAULT 1,
+  PRIMARY KEY (`itemId`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- URLs the crawler has already resolved as unusable. Their Items rows are
