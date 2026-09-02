@@ -40,6 +40,7 @@ assert_false('IPv6 loopback refused', IPAddress::isPubliclyRoutable('::1'));
 assert_false('IPv6 link-local refused', IPAddress::isPubliclyRoutable('fe80::1'));
 assert_false('IPv6 unique-local refused', IPAddress::isPubliclyRoutable('fc00::1'));
 assert_false('IPv4-mapped loopback refused', IPAddress::isPubliclyRoutable('::ffff:127.0.0.1'));
+assert_true('IPv4-mapped public address accepted', IPAddress::isPubliclyRoutable('::ffff:8.8.8.8'));
 assert_false('NAT64-wrapped loopback refused', IPAddress::isPubliclyRoutable('64:ff9b::7f00:1'));
 assert_false('IPv6 documentation range refused', IPAddress::isPubliclyRoutable('2001:db8::1'));
 assert_true('ordinary public IPv6 accepted', IPAddress::isPubliclyRoutable('2606:4700:4700::1111'));

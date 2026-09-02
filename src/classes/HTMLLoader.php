@@ -102,11 +102,13 @@ class HTMLLoader
         // suppressing them here is what lets loadHTML() parse "tag soup" the
         // same way a browser would rather than refusing to.
         //
-        // The prepended XML prolog forces libxml to trust the UTF-8 the string
-        // was just normalized to, instead of re-guessing the encoding from the
-        // raw bytes (which defaults to ISO-8859-1 for anything without its own
-        // <meta charset> or XML declaration, mangling multi-byte content).
-        $document -> loadHTML('<?xml encoding="UTF-8">' . $html, LIBXML_NOERROR | LIBXML_NOWARNING);
+        // The prepended declarations force libxml to trust the UTF-8 the
+        // string was just normalized to, instead of re-guessing the encoding
+        // from the raw bytes. The meta declaration must come before any stale
+        // declaration in the source: older libxml releases let a later HTML
+        // meta override the XML processing instruction and decode converted
+        // text a second time.
+        $document -> loadHTML('<?xml encoding="UTF-8"><meta charset="UTF-8">' . $html, LIBXML_NOERROR | LIBXML_NOWARNING);
 
         libxml_clear_errors();
 

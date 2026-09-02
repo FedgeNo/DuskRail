@@ -41,6 +41,15 @@ class IPAddress
      */
     public static function isPubliclyRoutable(string $address): bool
     {
+        $packedAddress = @inet_pton($address);
+        $mappedPrefix = str_repeat(chr(0), 10) . chr(0xFF) . chr(0xFF);
+
+        if ($packedAddress !== false && strlen($packedAddress) === 16 && str_starts_with($packedAddress, $mappedPrefix)) {
+            $mappedAddress = inet_ntop(substr($packedAddress, 12));
+
+            return $mappedAddress !== false && self::isPubliclyRoutable($mappedAddress);
+        }
+
         if (filter_var($address, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE) === false) {
             return false;
         }
