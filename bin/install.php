@@ -949,6 +949,52 @@ ALTER TABLE `Hosts`
             },
         ],
         [
+            // Fresh and stalled queue picks probe one host's uncrawled rows
+            // and then immediately distinguish unclaimed from expired
+            // claims. Keeping claimedUntil in the same index makes that
+            // decision inside the probe instead of fetching candidate rows
+            // from the clustered table to inspect it.
+            'name' => 'cover_host_item_claim_state',
+            'check' => fn () => index_exists('Items', 'hostId_crawledTime_claimedUntil'),
+            'apply' => function (): void {
+                run_sql('
+ALTER TABLE `Items`
+    DROP KEY `hostId_crawledTime`,
+    ADD KEY `hostId_crawledTime_claimedUntil` (`hostId`, `crawledTime`, `claimedUntil`)
+');
+            },
+        ],
+        [
+            // Forward crawl-feed polls use (crawledTime, itemId) as their
+            // inclusive cursor and stable order. itemId before type removes
+            // the per-poll filesort; retaining type last keeps the cached
+            // page/image count index-only.
+            'name' => 'order_crawl_feed_index',
+            'check' => fn () => index_exists('Items', 'crawledTime_itemId_type'),
+            'apply' => function (): void {
+                run_sql('
+ALTER TABLE `Items`
+    DROP KEY `crawledTime_type`,
+    ADD KEY `crawledTime_itemId_type` (`crawledTime`, `itemId`, `type`)
+');
+            },
+        ],
+        [
+            // The recrawl picker walks due rows in recrawlDueTime order and
+            // needs claimedUntil plus hostId for every candidate. Carry both
+            // in the same index so it stays an ordered covering range before
+            // the one-row primary-key host lookup.
+            'name' => 'cover_recrawl_queue_index',
+            'check' => fn () => index_exists('Items', 'recrawlDueTime_claimedUntil_hostId'),
+            'apply' => function (): void {
+                run_sql('
+ALTER TABLE `Items`
+    DROP KEY `recrawlDueTime`,
+    ADD KEY `recrawlDueTime_claimedUntil_hostId` (`recrawlDueTime`, `claimedUntil`, `hostId`)
+');
+            },
+        ],
+        [
             // The meta keywords tag carried the same weight in relevance as
             // the page's actual text. It is the one indexed field a page
             // author writes purely for search engines: nobody reading the

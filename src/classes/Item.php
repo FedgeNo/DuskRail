@@ -193,8 +193,8 @@ class Item
         }
 
         // Never-attempted items, driven from the (small) Hosts side: for each
-        // due host, one probe of the hostId_crawledTime index answers "any
-        // uncrawled, unclaimed item here?".
+        // due host, one probe of the hostId_crawledTime_claimedUntil index
+        // answers "any uncrawled, unclaimed item here?".
         $fresh = mysqli_query($connection, '
 SELECT `Items`.`itemId`, `Items`.`hostId`
     FROM `Hosts`
@@ -216,9 +216,9 @@ SELECT `Items`.`itemId`, `Items`.`hostId`
         // them on every pick whenever none did. The index range reads only
         // rows that are actually due, already in due order.
         $recrawl = mysqli_query($connection, '
-SELECT `Items`.`itemId`, `Items`.`hostId`
-    FROM `Items`
-    INNER JOIN `Hosts` ON `Hosts`.`hostId` = `Items`.`hostId`
+SELECT STRAIGHT_JOIN `Items`.`itemId`, `Items`.`hostId`
+    FROM `Items` FORCE INDEX (`recrawlDueTime_claimedUntil_hostId`)
+    INNER JOIN `Hosts` FORCE INDEX (`PRIMARY`) ON `Hosts`.`hostId` = `Items`.`hostId`
     WHERE `Items`.`recrawlDueTime` <= UNIX_TIMESTAMP()
         AND (`Items`.`claimedUntil` IS NULL OR `Items`.`claimedUntil` <= UNIX_TIMESTAMP())
         AND (`Hosts`.`nextCrawlTime` IS NULL OR `Hosts`.`nextCrawlTime` <= UNIX_TIMESTAMP())

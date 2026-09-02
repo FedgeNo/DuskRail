@@ -41,9 +41,9 @@ CREATE TABLE `Items` (
   `inc` int(10) unsigned NOT NULL DEFAULT 1,
   PRIMARY KEY (`itemId`),
   UNIQUE KEY `url` (`url`),
-  KEY `hostId_crawledTime` (`hostId`,`crawledTime`),
-  KEY `crawledTime_type` (`crawledTime`,`type`),
-  KEY `recrawlDueTime` (`recrawlDueTime`),
+  KEY `hostId_crawledTime_claimedUntil` (`hostId`,`crawledTime`,`claimedUntil`),
+  KEY `crawledTime_itemId_type` (`crawledTime`,`itemId`,`type`),
+  KEY `recrawlDueTime_claimedUntil_hostId` (`recrawlDueTime`,`claimedUntil`,`hostId`),
   FULLTEXT KEY `title_description_fullText` (`title`,`description`,`fullText`),
   CONSTRAINT `Items_ibfk_1` FOREIGN KEY (`hostId`) REFERENCES `Hosts` (`hostId`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
