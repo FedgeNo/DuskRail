@@ -256,11 +256,7 @@ input:focus-visible,
     overflow: hidden;
 }
 .WatchControls {
-    flex: 0 1 auto;
-    min-height: 0;
-    max-height: 50%;
-    overflow-y: auto;
-    overscroll-behavior-y: contain;
+    flex: 0 0 auto;
     background: #000;
 }
 .CrawlStatisticsTable {

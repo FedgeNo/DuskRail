@@ -10,9 +10,7 @@ $page = Page::create('Watching the Crawl');
 $watch = new Div();
 $watch -> class = 'WatchPage';
 
-// The instrumentation - status line, topic control, seed box - is its own
-// scroll region above the live feed, so either area can move without moving
-// the other.
+// The instrumentation stays above the independently scrolling live feed.
 $controls = new Div();
 $controls -> class = 'WatchControls';
 
