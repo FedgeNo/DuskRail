@@ -7,11 +7,12 @@ require __DIR__ . '/init.php';
 Auth::requirePage();
 
 $page = Page::create('Watching the Crawl');
+$watch = new Div();
+$watch -> class = 'WatchPage';
 
-// The instrumentation - status line, topic control, seed box - lives in one
-// sticky wrapper pinned below the nav, so it stays present while the page
-// scrolls with the feed. These are the controls for the thing being watched;
-// they're no use half-hidden under the navbar.
+// The instrumentation - status line, topic control, seed box - is its own
+// scroll region above the live feed, so either area can move without moving
+// the other.
 $controls = new Div();
 $controls -> class = 'WatchControls';
 
@@ -70,12 +71,13 @@ $seedAddButton -> class = 'btn btn-primary flex-shrink-0';
 $seedBar -> addContent($seedAddButton);
 
 $controls -> addContent($seedBar);
-$page -> addContent($controls);
+$watch -> addContent($controls);
 
 $feed = new Div();
 $feed -> id = 'feed';
 $feed -> class = 'bg-dark text-light font-monospace p-3';
-$page -> addContent($feed);
+$watch -> addContent($feed);
+$page -> addContent($watch);
 
 $script = new Script();
 $script -> src = ServerURL::absolute('/watch.js');

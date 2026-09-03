@@ -249,13 +249,18 @@ input:focus-visible,
 
 /* watch.php - crawl feed page */
 
-/* The instrumentation stays pinned just below the fixed navbar while the
-   page scrolls with the feed - the opaque background is what keeps feed
-   rows from showing through as they slide underneath. */
+.WatchPage {
+    display: flex;
+    flex-direction: column;
+    height: calc(100vh - 56px);
+    overflow: hidden;
+}
 .WatchControls {
-    position: sticky;
-    top: 56px;
-    z-index: 10;
+    flex: 0 1 auto;
+    min-height: 0;
+    max-height: 50%;
+    overflow-y: auto;
+    overscroll-behavior-y: contain;
     background: #000;
 }
 .CrawlStatisticsTable {
@@ -293,8 +298,10 @@ input:focus-visible,
     color: #00ff00;
 }
 #feed {
-    height: 80vh;
+    flex: 1 1 0;
+    min-height: 0;
     overflow-y: auto;
+    overscroll-behavior-y: contain;
 }
 .CrawlFeedItem {
     opacity: 0;
