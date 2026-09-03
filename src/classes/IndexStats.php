@@ -8,8 +8,8 @@ declare(strict_types=1);
  * the engine holds ten pages or ten million, and that's the first thing a
  * visitor wonders.
  *
- * CrawlStatistics owns and caches the catalogue scan shared with the admin
- * view, so the two summaries cannot drift or multiply the database work.
+ * CrawlStatistics reads the transactionally maintained catalogue counters
+ * shared with the admin view, so the two summaries cannot drift.
  */
 class IndexStats extends HTMLObject
 {

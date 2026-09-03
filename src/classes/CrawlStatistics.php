@@ -3,13 +3,11 @@
 declare(strict_types=1);
 
 /**
- * A cached snapshot of the crawl catalogue. Counting the Items index is
- * useful operationally but expensive enough at scale that neither the public
- * index summary nor a watching administrator should do it per request.
+ * The exact crawl catalogue counters maintained transactionally beside the
+ * rows whose state they describe.
  */
 class CrawlStatistics
 {
-    private const CACHE_SETTING = 'crawlStatisticsCache';
     public int $found = 0;
     public int $indexed = 0;
     public int $searchable = 0;
@@ -21,30 +19,16 @@ class CrawlStatistics
 
     public function __construct()
     {
-        $cached = json_decode((string) Setting::value(self::CACHE_SETTING), true);
-
-        if (is_array($cached)) {
-            $this -> hydrate($cached);
-
-            return;
-        }
-
         $result = mysqli_query(Database::connection(), '
-SELECT COUNT(*) AS `found`,
-        COUNT(`crawledTime`) AS `indexed`,
-        SUM(`crawledTime` IS NOT NULL AND `noindex` = 0) AS `searchable`,
-        SUM(`crawledTime` IS NULL) AS `queued`,
-        SUM(`crawledTime` IS NOT NULL AND `type` NOT LIKE \'image/%\') AS `pages`,
-        SUM(`crawledTime` IS NOT NULL AND `type` LIKE \'image/%\') AS `images`,
-        (SELECT COUNT(*) FROM `Hosts`) AS `hosts`,
-        (SELECT COUNT(*) FROM `DeadURLs`) AS `dead`
-    FROM `Items` FORCE INDEX (`crawledTime_itemId_type_noindex`)
+SELECT `found`, `indexed`, `searchable`, `queued`, `pages`, `images`, `hosts`, `dead`
+    FROM `CrawlCounters`
+    WHERE `counterId` = 1 AND `initializedAt` IS NOT NULL
 ');
         $row = mysqli_fetch_assoc($result);
-        $row['computedTime'] = time();
-        $this -> hydrate($row);
 
-        Setting::store(self::CACHE_SETTING, json_encode($row));
+        if ($row !== null) {
+            $this -> hydrate($row);
+        }
     }
 
     private function hydrate(array $row): void

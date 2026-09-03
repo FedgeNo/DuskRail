@@ -47,6 +47,26 @@ CREATE TABLE `Items` (
   CONSTRAINT `Items_ibfk_1` FOREIGN KEY (`hostId`) REFERENCES `Hosts` (`hostId`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- Exact catalogue totals maintained as rows enter, leave, or change state.
+-- counterId=1 is the sole row. A fresh empty database is initialized here;
+-- an existing catalogue is initialized by the deliberate backfill command.
+CREATE TABLE `CrawlCounters` (
+  `counterId` int(10) unsigned NOT NULL,
+  `found` bigint(20) unsigned NOT NULL DEFAULT 0,
+  `indexed` bigint(20) unsigned NOT NULL DEFAULT 0,
+  `searchable` bigint(20) unsigned NOT NULL DEFAULT 0,
+  `queued` bigint(20) unsigned NOT NULL DEFAULT 0,
+  `pages` bigint(20) unsigned NOT NULL DEFAULT 0,
+  `images` bigint(20) unsigned NOT NULL DEFAULT 0,
+  `hosts` bigint(20) unsigned NOT NULL DEFAULT 0,
+  `dead` bigint(20) unsigned NOT NULL DEFAULT 0,
+  `initializedAt` datetime DEFAULT NULL,
+  PRIMARY KEY (`counterId`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+INSERT INTO `CrawlCounters` (`counterId`, `initializedAt`)
+    VALUES (1, UTC_TIMESTAMP());
+
 CREATE TABLE `Links` (
   `parentId` int(10) unsigned NOT NULL,
   `childId` int(10) unsigned NOT NULL,
@@ -118,3 +138,72 @@ CREATE TABLE `Migrations` (
   PRIMARY KEY (`migrationId`),
   UNIQUE KEY `name` (`name`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TRIGGER `Items_crawl_counters_insert`
+AFTER INSERT ON `Items`
+FOR EACH ROW
+UPDATE `CrawlCounters`
+    SET `found` = `found` + 1,
+        `indexed` = `indexed` + (NEW.`crawledTime` IS NOT NULL),
+        `searchable` = `searchable` + (NEW.`crawledTime` IS NOT NULL AND NEW.`noindex` = 0),
+        `queued` = `queued` + (NEW.`crawledTime` IS NULL),
+        `pages` = `pages` + (NEW.`crawledTime` IS NOT NULL AND NEW.`type` NOT LIKE 'image/%'),
+        `images` = `images` + (NEW.`crawledTime` IS NOT NULL AND NEW.`type` LIKE 'image/%')
+    WHERE `counterId` = 1 AND `initializedAt` IS NOT NULL;
+
+CREATE TRIGGER `Items_crawl_counters_update`
+AFTER UPDATE ON `Items`
+FOR EACH ROW
+UPDATE `CrawlCounters`
+    SET `indexed` = `indexed` + (NEW.`crawledTime` IS NOT NULL) - (OLD.`crawledTime` IS NOT NULL),
+        `searchable` = `searchable`
+            + (NEW.`crawledTime` IS NOT NULL AND NEW.`noindex` = 0)
+            - (OLD.`crawledTime` IS NOT NULL AND OLD.`noindex` = 0),
+        `queued` = `queued` + (NEW.`crawledTime` IS NULL) - (OLD.`crawledTime` IS NULL),
+        `pages` = `pages`
+            + (NEW.`crawledTime` IS NOT NULL AND NEW.`type` NOT LIKE 'image/%')
+            - (OLD.`crawledTime` IS NOT NULL AND OLD.`type` NOT LIKE 'image/%'),
+        `images` = `images`
+            + (NEW.`crawledTime` IS NOT NULL AND NEW.`type` LIKE 'image/%')
+            - (OLD.`crawledTime` IS NOT NULL AND OLD.`type` LIKE 'image/%')
+    WHERE `counterId` = 1 AND `initializedAt` IS NOT NULL;
+
+CREATE TRIGGER `Items_crawl_counters_delete`
+AFTER DELETE ON `Items`
+FOR EACH ROW
+UPDATE `CrawlCounters`
+    SET `found` = `found` - 1,
+        `indexed` = `indexed` - (OLD.`crawledTime` IS NOT NULL),
+        `searchable` = `searchable` - (OLD.`crawledTime` IS NOT NULL AND OLD.`noindex` = 0),
+        `queued` = `queued` - (OLD.`crawledTime` IS NULL),
+        `pages` = `pages` - (OLD.`crawledTime` IS NOT NULL AND OLD.`type` NOT LIKE 'image/%'),
+        `images` = `images` - (OLD.`crawledTime` IS NOT NULL AND OLD.`type` LIKE 'image/%')
+    WHERE `counterId` = 1 AND `initializedAt` IS NOT NULL;
+
+CREATE TRIGGER `Hosts_crawl_counters_insert`
+AFTER INSERT ON `Hosts`
+FOR EACH ROW
+UPDATE `CrawlCounters`
+    SET `hosts` = `hosts` + 1
+    WHERE `counterId` = 1 AND `initializedAt` IS NOT NULL;
+
+CREATE TRIGGER `Hosts_crawl_counters_delete`
+AFTER DELETE ON `Hosts`
+FOR EACH ROW
+UPDATE `CrawlCounters`
+    SET `hosts` = `hosts` - 1
+    WHERE `counterId` = 1 AND `initializedAt` IS NOT NULL;
+
+CREATE TRIGGER `DeadURLs_crawl_counters_insert`
+AFTER INSERT ON `DeadURLs`
+FOR EACH ROW
+UPDATE `CrawlCounters`
+    SET `dead` = `dead` + 1
+    WHERE `counterId` = 1 AND `initializedAt` IS NOT NULL;
+
+CREATE TRIGGER `DeadURLs_crawl_counters_delete`
+AFTER DELETE ON `DeadURLs`
+FOR EACH ROW
+UPDATE `CrawlCounters`
+    SET `dead` = `dead` - 1
+    WHERE `counterId` = 1 AND `initializedAt` IS NOT NULL;

@@ -576,6 +576,22 @@ SELECT 1
     return $result !== false && mysqli_num_rows($result) > 0;
 }
 
+function trigger_exists(string $triggerName): bool
+{
+    $select = mysqli_prepare(Database::connection(), '
+SELECT 1
+    FROM `information_schema`.`TRIGGERS`
+    WHERE `TRIGGER_SCHEMA` = DATABASE()
+        AND `TRIGGER_NAME` = ?
+    LIMIT 1
+');
+    mysqli_stmt_bind_param($select, 's', $triggerName);
+    mysqli_stmt_execute($select);
+    $result = mysqli_stmt_get_result($select);
+
+    return $result !== false && mysqli_num_rows($result) > 0;
+}
+
 function run_sql(string $sql): void
 {
     if (!mysqli_query(Database::connection(), $sql)) {
@@ -699,6 +715,40 @@ CREATE TABLE `ThumbnailFetchFailures` (
   CONSTRAINT `ThumbnailFetchFailures_ibfk_1` FOREIGN KEY (`itemId`) REFERENCES `Items` (`itemId`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
 ');
+            },
+        ],
+        [
+            'name' => 'create_crawl_counters',
+            'check' => fn () => table_exists('CrawlCounters'),
+            'apply' => function (): void {
+                run_sql('
+CREATE TABLE `CrawlCounters` (
+  `counterId` int(10) unsigned NOT NULL,
+  `found` bigint(20) unsigned NOT NULL DEFAULT 0,
+  `indexed` bigint(20) unsigned NOT NULL DEFAULT 0,
+  `searchable` bigint(20) unsigned NOT NULL DEFAULT 0,
+  `queued` bigint(20) unsigned NOT NULL DEFAULT 0,
+  `pages` bigint(20) unsigned NOT NULL DEFAULT 0,
+  `images` bigint(20) unsigned NOT NULL DEFAULT 0,
+  `hosts` bigint(20) unsigned NOT NULL DEFAULT 0,
+  `dead` bigint(20) unsigned NOT NULL DEFAULT 0,
+  `initializedAt` datetime DEFAULT NULL,
+  PRIMARY KEY (`counterId`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+');
+
+                $existing_item = mysqli_query(Database::connection(), '
+SELECT 1
+    FROM `Items`
+    LIMIT 1
+');
+                $initialized_at = mysqli_num_rows($existing_item) === 0 ? gmdate('Y-m-d H:i:s') : null;
+                $insert = mysqli_prepare(Database::connection(), '
+INSERT INTO `CrawlCounters` (`counterId`, `initializedAt`)
+    VALUES (1, ?)
+');
+                mysqli_stmt_bind_param($insert, 's', $initialized_at);
+                mysqli_stmt_execute($insert);
             },
         ],
         [
@@ -1147,6 +1197,94 @@ UPDATE `Items`
             WHERE `Links`.`childId` = `Items`.`itemId`
     )
 ');
+            },
+        ],
+        [
+            'name' => 'create_crawl_counter_triggers',
+            'check' => fn () => trigger_exists('Items_crawl_counters_insert')
+                && trigger_exists('Items_crawl_counters_update')
+                && trigger_exists('Items_crawl_counters_delete')
+                && trigger_exists('Hosts_crawl_counters_insert')
+                && trigger_exists('Hosts_crawl_counters_delete')
+                && trigger_exists('DeadURLs_crawl_counters_insert')
+                && trigger_exists('DeadURLs_crawl_counters_delete'),
+            'apply' => function (): void {
+                run_sql(<<<'SQL'
+CREATE TRIGGER IF NOT EXISTS `Items_crawl_counters_insert`
+AFTER INSERT ON `Items`
+FOR EACH ROW
+UPDATE `CrawlCounters`
+    SET `found` = `found` + 1,
+        `indexed` = `indexed` + (NEW.`crawledTime` IS NOT NULL),
+        `searchable` = `searchable` + (NEW.`crawledTime` IS NOT NULL AND NEW.`noindex` = 0),
+        `queued` = `queued` + (NEW.`crawledTime` IS NULL),
+        `pages` = `pages` + (NEW.`crawledTime` IS NOT NULL AND NEW.`type` NOT LIKE 'image/%'),
+        `images` = `images` + (NEW.`crawledTime` IS NOT NULL AND NEW.`type` LIKE 'image/%')
+    WHERE `counterId` = 1 AND `initializedAt` IS NOT NULL
+SQL);
+                run_sql(<<<'SQL'
+CREATE TRIGGER IF NOT EXISTS `Items_crawl_counters_update`
+AFTER UPDATE ON `Items`
+FOR EACH ROW
+UPDATE `CrawlCounters`
+    SET `indexed` = `indexed` + (NEW.`crawledTime` IS NOT NULL) - (OLD.`crawledTime` IS NOT NULL),
+        `searchable` = `searchable`
+            + (NEW.`crawledTime` IS NOT NULL AND NEW.`noindex` = 0)
+            - (OLD.`crawledTime` IS NOT NULL AND OLD.`noindex` = 0),
+        `queued` = `queued` + (NEW.`crawledTime` IS NULL) - (OLD.`crawledTime` IS NULL),
+        `pages` = `pages`
+            + (NEW.`crawledTime` IS NOT NULL AND NEW.`type` NOT LIKE 'image/%')
+            - (OLD.`crawledTime` IS NOT NULL AND OLD.`type` NOT LIKE 'image/%'),
+        `images` = `images`
+            + (NEW.`crawledTime` IS NOT NULL AND NEW.`type` LIKE 'image/%')
+            - (OLD.`crawledTime` IS NOT NULL AND OLD.`type` LIKE 'image/%')
+    WHERE `counterId` = 1 AND `initializedAt` IS NOT NULL
+SQL);
+                run_sql(<<<'SQL'
+CREATE TRIGGER IF NOT EXISTS `Items_crawl_counters_delete`
+AFTER DELETE ON `Items`
+FOR EACH ROW
+UPDATE `CrawlCounters`
+    SET `found` = `found` - 1,
+        `indexed` = `indexed` - (OLD.`crawledTime` IS NOT NULL),
+        `searchable` = `searchable` - (OLD.`crawledTime` IS NOT NULL AND OLD.`noindex` = 0),
+        `queued` = `queued` - (OLD.`crawledTime` IS NULL),
+        `pages` = `pages` - (OLD.`crawledTime` IS NOT NULL AND OLD.`type` NOT LIKE 'image/%'),
+        `images` = `images` - (OLD.`crawledTime` IS NOT NULL AND OLD.`type` LIKE 'image/%')
+    WHERE `counterId` = 1 AND `initializedAt` IS NOT NULL
+SQL);
+                run_sql(<<<'SQL'
+CREATE TRIGGER IF NOT EXISTS `Hosts_crawl_counters_insert`
+AFTER INSERT ON `Hosts`
+FOR EACH ROW
+UPDATE `CrawlCounters`
+    SET `hosts` = `hosts` + 1
+    WHERE `counterId` = 1 AND `initializedAt` IS NOT NULL
+SQL);
+                run_sql(<<<'SQL'
+CREATE TRIGGER IF NOT EXISTS `Hosts_crawl_counters_delete`
+AFTER DELETE ON `Hosts`
+FOR EACH ROW
+UPDATE `CrawlCounters`
+    SET `hosts` = `hosts` - 1
+    WHERE `counterId` = 1 AND `initializedAt` IS NOT NULL
+SQL);
+                run_sql(<<<'SQL'
+CREATE TRIGGER IF NOT EXISTS `DeadURLs_crawl_counters_insert`
+AFTER INSERT ON `DeadURLs`
+FOR EACH ROW
+UPDATE `CrawlCounters`
+    SET `dead` = `dead` + 1
+    WHERE `counterId` = 1 AND `initializedAt` IS NOT NULL
+SQL);
+                run_sql(<<<'SQL'
+CREATE TRIGGER IF NOT EXISTS `DeadURLs_crawl_counters_delete`
+AFTER DELETE ON `DeadURLs`
+FOR EACH ROW
+UPDATE `CrawlCounters`
+    SET `dead` = `dead` - 1
+    WHERE `counterId` = 1 AND `initializedAt` IS NOT NULL
+SQL);
             },
         ],
     ];
