@@ -14,14 +14,12 @@ class CrawlStatisticsTable extends HTMLObject
             'indexed' => 'Indexed',
             'searchable' => 'Searchable',
             'queued' => 'Queued',
-        ],
-        [
             'pages' => 'Pages',
             'images' => 'Images',
-            'hosts' => 'Hosts',
-            'dead' => 'Dead',
         ],
         [
+            'hosts' => 'Hosts',
+            'dead' => 'Dead',
             'disk-free' => 'Disk Free',
             'disk-used' => 'Disk Used',
             'memory' => 'Memory',
