@@ -10,8 +10,6 @@ declare(strict_types=1);
 class CrawlStatistics
 {
     private const CACHE_SETTING = 'crawlStatisticsCache';
-    private const TTL_SECONDS = 60;
-
     public int $found = 0;
     public int $indexed = 0;
     public int $searchable = 0;
@@ -25,7 +23,7 @@ class CrawlStatistics
     {
         $cached = json_decode((string) Setting::value(self::CACHE_SETTING), true);
 
-        if (is_array($cached) && time() - (int) ($cached['computedTime'] ?? 0) < self::TTL_SECONDS) {
+        if (is_array($cached)) {
             $this -> hydrate($cached);
 
             return;
