@@ -80,6 +80,7 @@ class Sitemap
             // An index file's entries are more sitemaps, not pages - they
             // join the fetch queue instead of the crawl queue.
             $isIndex = self::isSitemapIndex($body);
+            $discoveries = [];
 
             foreach (self::locations($body) as $location) {
                 $url = new URL($location);
@@ -100,9 +101,19 @@ class Sitemap
                     break;
                 }
 
-                if (Item::findOrCreateByURL($url, 'unknown') !== null) {
-                    $queued++;
-                }
+                $urlString = $url -> toString();
+                $discoveries[$urlString] = [
+                    'url' => $url,
+                    'type' => 'unknown',
+                    'description' => null,
+                    'count' => 1,
+                ];
+            }
+
+            if ($discoveries !== []) {
+                $remaining = array_slice($discoveries, 0, self::MAX_URLS - $queued, true);
+                $items = Database::transaction(static fn (): array => Item::findOrCreateManyByURL($remaining));
+                $queued += count($items);
             }
         }
 

@@ -73,7 +73,7 @@ const CHROME_RETRY_COOLDOWN_SECONDS = 5.0;
 // How often the heartbeat Setting is refreshed. Comfortably under the
 // staleness threshold the watch page uses, comfortably over the loop's own
 // tick so this isn't a database write 10 times a second.
-const HEARTBEAT_INTERVAL_SECONDS = 5.0;
+const HEARTBEAT_INTERVAL_SECONDS = 15.0;
 
 // SIGINT (Ctrl+C) or SIGTERM (a plain `kill`) means "stop when convenient",
 // not "stop now" - crawler.php itself ignores both, so the only thing that

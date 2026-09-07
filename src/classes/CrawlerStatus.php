@@ -13,7 +13,7 @@ declare(strict_types=1);
  */
 class CrawlerStatus
 {
-    private const STALE_AFTER_SECONDS = 15;
+    private const STALE_AFTER_SECONDS = 45;
 
     public bool $running = false;
     public ?int $lastHeartbeatTime = null;

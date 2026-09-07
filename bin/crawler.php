@@ -693,23 +693,6 @@ foreach ($anchorLinks as $link) {
     ];
 }
 
-// Whatever comes back entered the queue; the rest was already dead or on a
-// host with more waiting than it can work through.
-$discovered = Item::findOrCreateManyByURL($discoveries);
-$links = [];
-
-foreach ($discovered as $urlString => $discoveredItem) {
-    $links[$discoveredItem -> itemId] = $discoveries[$urlString]['description'];
-}
-
-// inc counts distinct linking pages, so it's raised off the edges that were
-// actually new rather than off every link the page happens to carry this
-// time round.
-Item::countInboundLinks(Link::createMany($item -> itemId, $links));
-
-echo 'Saved ' . count($discovered) . ' of ' . count($discoveries) . ' discovered URLs (' . count($images) . ' images, ' . count($anchorLinks) . ' links on the page).
-';
-
 HTMLLoader::removeStyleAndScriptTags($document);
 HTMLLoader::removeBoilerplateElements($document);
 $bodyText = HTMLLoader::extractBodyText($document);
@@ -719,8 +702,37 @@ $bodyText = HTMLLoader::extractBodyText($document);
 // is a reasonable stand-in over leaving it null, both for display and for
 // search relevance.
 $description = $metadata['description'] ?? mb_substr($bodyText, 0, 500);
+$originalContentHash = $item -> contentHash;
+$originalRecrawlAfterSeconds = $item -> recrawlAfterSeconds;
 
-$item -> markCrawled($contentType -> type, $metadata['title'], $description, $metadata['keywords'], $bodyText, $html, $noindex ? 1 : 0);
+$discovered = Database::transaction(function () use ($discoveries, $item, $contentType, $metadata, $description, $bodyText, $html, $noindex, $originalContentHash, $originalRecrawlAfterSeconds): array {
+    $items = Item::findOrCreateManyByURL($discoveries);
+    $links = [];
+
+    foreach ($items as $urlString => $discoveredItem) {
+        $links[$discoveredItem -> itemId] = $discoveries[$urlString]['description'];
+    }
+
+    // inc counts distinct linking pages, so it's raised off the edges that
+    // were actually new rather than off every link the page carries.
+    Item::countInboundLinks(Link::createMany($item -> itemId, $links));
+
+    // A deadlock retry reruns this callback after rolling its writes back.
+    // Restore the inputs used to calculate the adaptive recrawl interval so
+    // markCrawled() does not compare against its rolled-back first attempt.
+    $item -> contentHash = $originalContentHash;
+    $item -> recrawlAfterSeconds = $originalRecrawlAfterSeconds;
+    $item -> markCrawled($contentType -> type, $metadata['title'], $description, $metadata['keywords'], $bodyText, $html, $noindex ? 1 : 0, false);
+
+    return $items;
+});
+
+SearchIndexQueue::processPending();
+
+// Whatever came back entered the queue; the rest was already dead or on a
+// host with more waiting than it can work through.
+echo 'Saved ' . count($discovered) . ' of ' . count($discoveries) . ' discovered URLs (' . count($images) . ' images, ' . count($anchorLinks) . ' links on the page).
+';
 
 echo 'Marked crawled' . ($noindex ? ' (noindex - excluded from search)' : '') . '.
 ';

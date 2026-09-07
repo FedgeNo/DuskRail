@@ -47,39 +47,54 @@ SELECT `itemId`, `syncItem`, `syncLinks`, `generation`
     ORDER BY `itemId`
     LIMIT ' . $limit . '
 ');
-        $processed = 0;
+        $rows = mysqli_fetch_all($result, MYSQLI_ASSOC);
+        $item_ids = [];
+        $link_ids = [];
 
-        foreach (mysqli_fetch_all($result, MYSQLI_ASSOC) as $row) {
+        foreach ($rows as $row) {
             $item_id = (int) $row['itemId'];
 
-            try {
-                if ((int) $row['syncItem'] === 1) {
-                    ItemSearchIndex::syncIds([$item_id]);
-                }
+            if ((int) $row['syncItem'] === 1) {
+                $item_ids[] = $item_id;
+            }
 
-                if ((int) $row['syncLinks'] === 1) {
-                    LinkSearchIndex::syncItemIds([$item_id]);
-                }
-            } catch (\Throwable $exception) {
-                if ($fail_on_error) {
-                    throw $exception;
-                }
+            if ((int) $row['syncLinks'] === 1) {
+                $link_ids[] = $item_id;
+            }
+        }
 
-                error_log('Search-index synchronization failed: ' . $exception -> getMessage());
-                break;
+        try {
+            ItemSearchIndex::syncIds($item_ids);
+            LinkSearchIndex::syncItemIds($link_ids);
+        } catch (\Throwable $exception) {
+            if ($fail_on_error) {
+                throw $exception;
+            }
+
+            error_log('Search-index synchronization failed: ' . $exception -> getMessage());
+
+            return 0;
+        }
+
+        foreach (array_chunk($rows, 200) as $chunk) {
+            $conditions = [];
+            $values = [];
+
+            foreach ($chunk as $row) {
+                $conditions[] = '(`itemId` = ? AND `generation` = ?)';
+                $values[] = (int) $row['itemId'];
+                $values[] = (int) $row['generation'];
             }
 
             $delete = mysqli_prepare(Database::connection(), '
 DELETE FROM `SearchIndexQueue`
-    WHERE `itemId` = ? AND `generation` = ?
+    WHERE ' . implode(' OR ', $conditions) . '
 ');
-            $generation = (int) $row['generation'];
-            mysqli_stmt_bind_param($delete, 'ii', $item_id, $generation);
+            mysqli_stmt_bind_param($delete, str_repeat('ii', count($chunk)), ...$values);
             mysqli_stmt_execute($delete);
-            $processed++;
         }
 
-        return $processed;
+        return count($rows);
     }
 
     public static function hasPending(): bool

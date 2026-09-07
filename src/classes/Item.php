@@ -694,7 +694,7 @@ UPDATE `Items`
      * only for future re-processing, and it compresses to about a quarter.
      * decompressedFullHTML() is the matching reader.
      */
-    public function markCrawled(string $type, ?string $title, ?string $description, ?string $keywords, ?string $fullText, ?string $fullHTML, int $noindex = 0): void
+    public function markCrawled(string $type, ?string $title, ?string $description, ?string $keywords, ?string $fullText, ?string $fullHTML, int $noindex = 0, bool $processSearchIndex = true): void
     {
         $connection = Database::connection();
         $now = time();
@@ -742,7 +742,10 @@ UPDATE `Items`
         $this -> recrawlDueTime = $now + $recrawlAfterSeconds;
 
         SearchIndexQueue::record([$this -> itemId], true, false);
-        SearchIndexQueue::processPending();
+
+        if ($processSearchIndex) {
+            SearchIndexQueue::processPending();
+        }
     }
 
     /**
