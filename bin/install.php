@@ -1768,6 +1768,10 @@ ExecStart={$php_binary} {$root}/bin/crawler-manager.php
 KillMode=mixed
 TimeoutStopSec=120
 Restart=no
+# Keep a runaway browser or worker from crowding out the live site and its
+# database. Apply reclaim pressure before enforcing the absolute cgroup cap.
+MemoryHigh=6G
+MemoryMax=8G
 # Chrome refuses to start at all without a writable HOME - its crash handler
 # is initialised before anything else and has no fallback. systemd creates and
 # owns this directory for the service account.
