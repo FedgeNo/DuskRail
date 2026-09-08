@@ -21,14 +21,10 @@ declare(strict_types=1);
  * fetch, but not free, so WORKER_COUNT should be picked with the machine's
  * actual headroom in mind.
  *
- * A rotation doesn't tear down the outgoing Chrome instance the moment its
- * replacement is up - with more than one worker, there's usually *some*
- * worker mid-fetch against it at any given moment, so "wait until every slot
- * happens to be idle at once" could mean never rotating at all during a busy
- * stretch. Instead each running worker is tagged with the Chrome generation
- * it was dispatched against (see $chromeInstances/$chromeGeneration below);
- * a superseded generation is only actually shut down once every worker
- * tagged with it has finished, however long that drain takes.
+ * Rotation stops dispatching first. The current Chrome drains every worker
+ * already using it, shuts down at refCount zero, and only then is its
+ * replacement launched. There is deliberately a short dispatch gap rather
+ * than two browser generations occupying memory at once.
  */
 
 if (PHP_SAPI !== 'cli') {
@@ -139,20 +135,11 @@ function launch_chrome(OutboundProxyProcess $proxy): ?ChromeProcess
 }
 
 /**
- * Ensures $chromeInstances[$currentGeneration] is healthy and hasn't aged
- * out, rotating in a fresh generation (launched and published BEFORE the
- * outgoing one is even considered for teardown, so there's never a moment
- * where the endpoint file points at nothing usable) if not. An outgoing
- * generation that still has workers on it stays in $chromeInstances to
- * drain - see release_chrome_reference(), which shuts it down once the last
- * of them finishes. One at refCount 0 has already drained rather than being
- * momentarily idle: every worker dispatched from here on is tagged with the
- * new generation instead, so nothing can pick the outgoing one back up and
- * no later release would ever arrive to shut it down - that case is torn
- * down here and now. Returns false (leaving $lastAttemptAt untouched)
- * if a real replacement attempt is due but still within its retry cooldown,
- * or if the attempt itself just failed - true otherwise, including when the
- * existing generation was already fine as-is.
+ * Keeps the current Chrome while it is healthy and young. Once rotation is
+ * due, no new worker is dispatched until every existing reference drains;
+ * the old process is then stopped before a replacement launch is attempted.
+ * Returns false during that drain, during launch cooldown, or after a failed
+ * launch, and true only while a usable current generation exists.
  */
 function ensure_current_chrome_generation(array &$chromeInstances, int &$currentGeneration, float &$lastAttemptAt, OutboundProxyProcess $proxy): bool
 {
@@ -162,42 +149,46 @@ function ensure_current_chrome_generation(array &$chromeInstances, int &$current
         return true;
     }
 
+    if ($current !== null && $current['refCount'] > 0) {
+        if (!($current['draining'] ?? false)) {
+            echo 'Draining Chrome instance (' . ($current['process'] -> isHealthy() ? 'scheduled rotation' : 'unhealthy')
+                . '), waiting for ' . $current['refCount'] . ' in-flight worker(s).
+';
+            $chromeInstances[$currentGeneration]['draining'] = true;
+        }
+
+        return false;
+    }
+
     if (microtime(true) - $lastAttemptAt < CHROME_RETRY_COOLDOWN_SECONDS) {
-        return $current !== null && $current['process'] -> isHealthy();
+        return false;
     }
 
     $lastAttemptAt = microtime(true);
+
+    if ($current !== null) {
+        $current['process'] -> shutdown();
+        unset($chromeInstances[$currentGeneration]);
+        clear_chrome_endpoint();
+    }
+
     $replacement = launch_chrome($proxy);
 
     if ($replacement === null) {
-        return $current !== null && $current['process'] -> isHealthy();
+        return false;
     }
 
-    if ($current !== null) {
-        echo 'Rotating Chrome instance (' . ($current['process'] -> isHealthy() ? 'scheduled rotation' : 'unhealthy')
-            . '), draining ' . $current['refCount'] . ' in-flight worker(s) still tagged with it.
-';
-    }
-
-    $outgoingGeneration = $currentGeneration;
     $currentGeneration++;
-    $chromeInstances[$currentGeneration] = ['process' => $replacement, 'refCount' => 0];
-
-    if (isset($chromeInstances[$outgoingGeneration]) && $chromeInstances[$outgoingGeneration]['refCount'] <= 0) {
-        $chromeInstances[$outgoingGeneration]['process'] -> shutdown();
-        unset($chromeInstances[$outgoingGeneration]);
-    }
+    $chromeInstances[$currentGeneration] = ['process' => $replacement, 'refCount' => 0, 'draining' => false];
 
     return true;
 }
 
 /**
- * Drops one worker's claim on $generation, shutting it down once nothing's
- * tagged with it anymore - but never the current generation just because
- * it's momentarily idle between dispatches, only ever a superseded one that
- * ensure_current_chrome_generation() has already moved past.
+ * Drops one worker's claim on its generation. Rotation observes refCount zero
+ * on the next manager tick and shuts down the browser before replacing it.
  */
-function release_chrome_reference(array &$chromeInstances, int $generation, int $currentGeneration): void
+function release_chrome_reference(array &$chromeInstances, int $generation): void
 {
     if (!isset($chromeInstances[$generation])) {
         return;
@@ -205,10 +196,6 @@ function release_chrome_reference(array &$chromeInstances, int $generation, int 
 
     $chromeInstances[$generation]['refCount']--;
 
-    if ($generation !== $currentGeneration && $chromeInstances[$generation]['refCount'] <= 0) {
-        $chromeInstances[$generation]['process'] -> shutdown();
-        unset($chromeInstances[$generation]);
-    }
 }
 
 /**
@@ -326,9 +313,7 @@ while (true) {
 ';
     }
 
-    // Every generation still being held, not just the current one - a
-    // draining instance keeps logging right up until its last worker lets go
-    // of it (see ChromeProcess::drainOutput() on what a full pipe does to it).
+    // A draining instance keeps logging until its last worker lets go of it.
     foreach ($chromeInstances as $instance) {
         $instance['process'] -> drainOutput();
     }
@@ -450,7 +435,7 @@ while (true) {
         fclose($worker['pipes'][1]);
         fclose($worker['pipes'][2]);
         proc_close($worker['process']);
-        release_chrome_reference($chromeInstances, $worker['chromeGeneration'], $chromeGeneration);
+        release_chrome_reference($chromeInstances, $worker['chromeGeneration']);
         $worker = null;
     }
     unset($worker);
