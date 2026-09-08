@@ -45,6 +45,14 @@ class RateLimit
     // guesses a minute, not as many as bcrypt can be made to check.
     private const LOGIN_LIMIT = 5;
 
+    // Thumbnail budgets - see enforceThumbnailAPI() for why these have to be
+    // this wide. A single image grid page requests one thumbnail per result
+    // (up to SearchResults::PAGE_SIZE of them) the moment it paints, and
+    // infinite scroll keeps adding pages, so the per-browser and per-address
+    // figures are deliberately orders of magnitude above the search budgets.
+    private const THUMBNAIL_CLIENT_LIMIT = 1000;
+    private const THUMBNAIL_ADDRESS_LIMIT = 2000;
+
     private const CLIENT_COOKIE = 'duskrailClient';
     private const CLIENT_TOKEN_BYTES = 16;
     private const CLIENT_TOKEN_LENGTH = self::CLIENT_TOKEN_BYTES * 2;
@@ -63,7 +71,36 @@ class RateLimit
      */
     public static function enforcePublicAPI(): void
     {
-        $retryAfter = self::exceededBy();
+        self::enforce('', self::ADDRESS_LIMIT, self::CLIENT_LIMIT);
+    }
+
+    /**
+     * The same budget shape for the thumbnail endpoint, priced for its very
+     * different traffic rather than reusing the search limits. A reader
+     * scrolling an image grid is a legitimate burst of thumbnails - one page
+     * requests up to SearchResults::PAGE_SIZE of them at once, infinite scroll
+     * adds another page each time the bottom is reached - so these are wide
+     * enough that a real reader never notices, while still bounding a caller
+     * trying to use the server as a thumbnail factory. Separate buckets from
+     * the search endpoints, so browsing images neither consumes nor is
+     * consumed by a search budget. Only ever reached on a cache miss anyway:
+     * a stored thumbnail is served by Apache without touching PHP, and
+     * ThumbnailCache's per-client concurrency cap already bounds how many
+     * outbound fetches can be in flight.
+     */
+    public static function enforceThumbnailAPI(): void
+    {
+        self::enforce('thumb-', self::THUMBNAIL_ADDRESS_LIMIT, self::THUMBNAIL_CLIENT_LIMIT);
+    }
+
+    /**
+     * The shared 429-and-stop path behind the two public-budget entry points
+     * above. $bucketPrefix scopes the counters so two endpoints don't share a
+     * budget; it must keep the resulting bucket names within RateLimits.bucket.
+     */
+    private static function enforce(string $bucketPrefix, int $addressLimit, int $clientLimit): void
+    {
+        $retryAfter = self::exceededBy($bucketPrefix, $addressLimit, $clientLimit);
 
         if ($retryAfter === null) {
             return;
@@ -110,16 +147,16 @@ class RateLimit
      * one has already tripped - a caller that keeps hammering a closed door
      * shouldn't have its other budget quietly recovering while it does.
      */
-    private static function exceededBy(): ?int
+    private static function exceededBy(string $bucketPrefix, int $addressLimit, int $clientLimit): ?int
     {
         $windowStart = intdiv(time(), self::WINDOW_SECONDS) * self::WINDOW_SECONDS;
 
-        $addressCount = self::countRequest('address', self::address(), $windowStart);
-        $clientCount = self::countRequest('client', self::clientToken(), $windowStart);
+        $addressCount = self::countRequest($bucketPrefix . 'address', self::address(), $windowStart);
+        $clientCount = self::countRequest($bucketPrefix . 'client', self::clientToken(), $windowStart);
 
         self::cleanUpOccasionally($windowStart);
 
-        if ($addressCount <= self::ADDRESS_LIMIT && $clientCount <= self::CLIENT_LIMIT) {
+        if ($addressCount <= $addressLimit && $clientCount <= $clientLimit) {
             return null;
         }
 

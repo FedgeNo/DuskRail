@@ -128,27 +128,45 @@ class ChromeConnection
         $bodyRequestId = null;
         $pendingRequestId = null;
 
-        $tab -> waitUntil(function (array $message) use ($tab, $navigateCommandId, &$bodyRequestId, &$pendingRequestId): bool {
-            if (($message['method'] ?? null) === 'Fetch.requestPaused') {
-                return $this -> handleRequestPaused($tab, $message['params'], $bodyRequestId, $pendingRequestId);
+        try {
+            $tab -> waitUntil(function (array $message) use ($tab, $navigateCommandId, &$bodyRequestId, &$pendingRequestId): bool {
+                if (($message['method'] ?? null) === 'Fetch.requestPaused') {
+                    return $this -> handleRequestPaused($tab, $message['params'], $bodyRequestId, $pendingRequestId);
+                }
+
+                if ($bodyRequestId !== null && ($message['id'] ?? null) === $bodyRequestId) {
+                    $this -> handleResponseBody($tab, $message, $pendingRequestId);
+
+                    return true;
+                }
+
+                // The navigation itself never reached a response at all - a DNS
+                // failure, connection refused, TLS handshake failure, and so on.
+                // Same "nothing usable" outcome as HTTPConnection's statusCode
+                // staying null for the same class of failure.
+                if (($message['id'] ?? null) === $navigateCommandId && isset($message['result']['errorText'])) {
+                    return true;
+                }
+
+                return false;
+            }, microtime(true) + self::NAVIGATION_TIMEOUT_SECONDS);
+        } catch (\RuntimeException $exception) {
+            // The only RuntimeException waitUntil() can raise here is
+            // WebSocketClient refusing a CDP message over its 32 MiB budget -
+            // a response whose Content-Length was missing or lied, so
+            // handleRequestPaused() never got to refuse it up front. Treat it
+            // exactly like that up-front refusal: bodyTruncated, no body. The
+            // alternative is letting the throw escape to bin/crawler.php, which
+            // reads it as "Chrome instance unreachable" and retries the item
+            // forever. Only meaningful when a body read was actually in flight;
+            // rethrow otherwise, since that would not be this case.
+            if ($bodyRequestId === null) {
+                throw $exception;
             }
 
-            if ($bodyRequestId !== null && ($message['id'] ?? null) === $bodyRequestId) {
-                $this -> handleResponseBody($tab, $message, $pendingRequestId);
-
-                return true;
-            }
-
-            // The navigation itself never reached a response at all - a DNS
-            // failure, connection refused, TLS handshake failure, and so on.
-            // Same "nothing usable" outcome as HTTPConnection's statusCode
-            // staying null for the same class of failure.
-            if (($message['id'] ?? null) === $navigateCommandId && isset($message['result']['errorText'])) {
-                return true;
-            }
-
-            return false;
-        }, microtime(true) + self::NAVIGATION_TIMEOUT_SECONDS);
+            $this -> bodyTruncated = true;
+            $this -> body = '';
+        }
     }
 
     private function handleRequestPaused(ChromeTab $tab, array $params, ?int &$bodyRequestId, ?string &$pendingRequestId): bool

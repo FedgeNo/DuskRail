@@ -335,7 +335,7 @@ while (true) {
     $outboundProxy -> drainOutput();
 
     if (!$outboundProxy -> isHealthy()) {
-        fwrite(STDERR, 'Outbound proxy stopped unexpectedly; draining workers and shutting down.\n');
+        fwrite(STDERR, "Outbound proxy stopped unexpectedly; draining workers and shutting down.\n");
         $shuttingDown = true;
     }
 
