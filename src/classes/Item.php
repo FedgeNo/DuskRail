@@ -668,7 +668,7 @@ UPDATE `Items`
             mysqli_stmt_execute($update);
         }
 
-        SearchIndexQueue::record($itemIds, true, false);
+        SearchIndexQueue::recordCounts($itemIds);
     }
 
     /**
@@ -696,6 +696,11 @@ UPDATE `Items`
      */
     public function markCrawled(string $type, ?string $title, ?string $description, ?string $keywords, ?string $fullText, ?string $fullHTML, int $noindex = 0, bool $processSearchIndex = true): void
     {
+        $this -> markCrawledContent($type, $title, $description, $keywords, new CrawlContent($fullText, $fullHTML), $noindex, $processSearchIndex);
+    }
+
+    public function markCrawledContent(string $type, ?string $title, ?string $description, ?string $keywords, CrawlContent $content, int $noindex = 0, bool $processSearchIndex = true): void
+    {
         $connection = Database::connection();
         $now = time();
 
@@ -704,21 +709,9 @@ UPDATE `Items`
         $description = self::truncate($description, self::MAX_DESCRIPTION_LENGTH);
         $keywords = self::truncate($keywords, self::MAX_KEYWORDS_LENGTH);
 
-        // Applied here rather than at each of the places text is extracted
-        // (HTML body, PDF, plain text) because this is the one call all of
-        // them end at - a cap a future content type could be added around is
-        // no cap at all. See Text::capRepeatedTerms() for why an unbounded
-        // term count decides rankings outright.
-        $fullText = $fullText !== null ? Text::capRepeatedTerms($fullText) : null;
-
-        // Hashed after capping, so the recrawl schedule compares what's
-        // actually stored against what was actually stored last time.
-        $contentHash = sha1((string) $fullText);
-        $recrawlAfterSeconds = $contentHash === $this -> contentHash
+        $recrawlAfterSeconds = $content -> contentHash === $this -> contentHash
             ? min(($this -> recrawlAfterSeconds ?? self::RECRAWL_BASE_SECONDS) * 2, self::RECRAWL_MAX_SECONDS)
             : self::RECRAWL_BASE_SECONDS;
-
-        $storedFullHTML = $fullHTML !== null ? gzencode($fullHTML, 6) : null;
 
         $update = mysqli_prepare($connection, '
 UPDATE `Items`
@@ -726,18 +719,19 @@ UPDATE `Items`
         `crawledTime` = ?, `noindex` = ?, `contentHash` = ?, `recrawlAfterSeconds` = ?
     WHERE `itemId` = ?
 ');
-        mysqli_stmt_bind_param($update, 'ssssssiisii', $type, $title, $description, $keywords, $fullText, $storedFullHTML, $now, $noindex, $contentHash, $recrawlAfterSeconds, $this -> itemId);
+        $values = [$type, $title, $description, $keywords, $content -> fullText, $content -> fullHTML, $now, $noindex, $content -> contentHash, $recrawlAfterSeconds, $this -> itemId];
+        mysqli_stmt_bind_param($update, 'ssssssiisii', ...$values);
         mysqli_stmt_execute($update);
 
         $this -> type = $type;
         $this -> title = $title;
         $this -> description = $description;
         $this -> keywords = $keywords;
-        $this -> fullText = $fullText;
-        $this -> fullHTML = $storedFullHTML;
+        $this -> fullText = $content -> fullText;
+        $this -> fullHTML = $content -> fullHTML;
         $this -> crawledTime = $now;
         $this -> noindex = $noindex;
-        $this -> contentHash = $contentHash;
+        $this -> contentHash = $content -> contentHash;
         $this -> recrawlAfterSeconds = $recrawlAfterSeconds;
         $this -> recrawlDueTime = $now + $recrawlAfterSeconds;
 

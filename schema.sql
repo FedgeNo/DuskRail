@@ -80,6 +80,9 @@ CREATE TABLE `Links` (
 -- Durable work left when a MariaDB mutation needs to be reflected in the
 -- derived Manticore indexes. No foreign key: deleting an Item is one of the
 -- events this table must retain long enough to deliver.
+-- syncItem: 0=none, 1=full document, 2=inbound count (with metadata repair).
+-- syncLinks: 0=none, 1=all incident edges.
+-- Full work takes precedence when pending requests are combined.
 CREATE TABLE `SearchIndexQueue` (
   `itemId` int(10) unsigned NOT NULL,
   `syncItem` tinyint(1) unsigned NOT NULL DEFAULT 0,
@@ -151,9 +154,16 @@ UPDATE `CrawlCounters`
         `images` = `images` + (NEW.`crawledTime` IS NOT NULL AND NEW.`type` LIKE 'image/%')
     WHERE `counterId` = 1 AND `initializedAt` IS NOT NULL;
 
+DELIMITER $$
 CREATE TRIGGER `Items_crawl_counters_update`
 AFTER UPDATE ON `Items`
 FOR EACH ROW
+BEGIN
+    IF (NEW.`crawledTime` IS NOT NULL) <> (OLD.`crawledTime` IS NOT NULL)
+        OR (NEW.`crawledTime` IS NOT NULL AND NEW.`noindex` = 0)
+            <> (OLD.`crawledTime` IS NOT NULL AND OLD.`noindex` = 0)
+        OR (NEW.`crawledTime` IS NOT NULL AND NEW.`type` LIKE 'image/%')
+            <> (OLD.`crawledTime` IS NOT NULL AND OLD.`type` LIKE 'image/%') THEN
 UPDATE `CrawlCounters`
     SET `indexed` = `indexed` + (NEW.`crawledTime` IS NOT NULL) - (OLD.`crawledTime` IS NOT NULL),
         `searchable` = `searchable`
@@ -167,6 +177,9 @@ UPDATE `CrawlCounters`
             + (NEW.`crawledTime` IS NOT NULL AND NEW.`type` LIKE 'image/%')
             - (OLD.`crawledTime` IS NOT NULL AND OLD.`type` LIKE 'image/%')
     WHERE `counterId` = 1 AND `initializedAt` IS NOT NULL;
+    END IF;
+END$$
+DELIMITER ;
 
 CREATE TRIGGER `Items_crawl_counters_delete`
 AFTER DELETE ON `Items`

@@ -1287,6 +1287,38 @@ UPDATE `CrawlCounters`
 SQL);
             },
         ],
+        [
+            'name' => 'skip_unchanged_crawl_counters',
+            'check' => fn () => false,
+            'apply' => function (): void {
+                run_sql(<<<'SQL'
+CREATE OR REPLACE TRIGGER `Items_crawl_counters_update`
+AFTER UPDATE ON `Items`
+FOR EACH ROW
+BEGIN
+    IF (NEW.`crawledTime` IS NOT NULL) <> (OLD.`crawledTime` IS NOT NULL)
+        OR (NEW.`crawledTime` IS NOT NULL AND NEW.`noindex` = 0)
+            <> (OLD.`crawledTime` IS NOT NULL AND OLD.`noindex` = 0)
+        OR (NEW.`crawledTime` IS NOT NULL AND NEW.`type` LIKE 'image/%')
+            <> (OLD.`crawledTime` IS NOT NULL AND OLD.`type` LIKE 'image/%') THEN
+        UPDATE `CrawlCounters`
+            SET `indexed` = `indexed` + (NEW.`crawledTime` IS NOT NULL) - (OLD.`crawledTime` IS NOT NULL),
+                `searchable` = `searchable`
+                    + (NEW.`crawledTime` IS NOT NULL AND NEW.`noindex` = 0)
+                    - (OLD.`crawledTime` IS NOT NULL AND OLD.`noindex` = 0),
+                `queued` = `queued` + (NEW.`crawledTime` IS NULL) - (OLD.`crawledTime` IS NULL),
+                `pages` = `pages`
+                    + (NEW.`crawledTime` IS NOT NULL AND NEW.`type` NOT LIKE 'image/%')
+                    - (OLD.`crawledTime` IS NOT NULL AND OLD.`type` NOT LIKE 'image/%'),
+                `images` = `images`
+                    + (NEW.`crawledTime` IS NOT NULL AND NEW.`type` LIKE 'image/%')
+                    - (OLD.`crawledTime` IS NOT NULL AND OLD.`type` LIKE 'image/%')
+            WHERE `counterId` = 1 AND `initializedAt` IS NOT NULL;
+    END IF;
+END
+SQL);
+            },
+        ],
     ];
 }
 

@@ -10,33 +10,62 @@ final class LinkSearchIndex extends SearchIndex
     public static function syncItemIds(array $item_ids): void
     {
         $item_ids = array_values(array_unique(array_filter(array_map('intval', $item_ids), static fn (int $id): bool => $id > 0)));
-
         if ($item_ids === []) {
             return;
         }
 
-        $placeholders = self::placeholders(count($item_ids));
         self::run(
-            'DELETE FROM ' . self::TABLE . ' WHERE parentid IN (' . $placeholders . ') OR childid IN (' . $placeholders . ')',
-            str_repeat('i', count($item_ids) * 2),
-            ...array_merge($item_ids, $item_ids)
+            'DELETE FROM ' . self::TABLE . ' WHERE parentid IN (' . self::placeholders(count($item_ids)) . ')',
+            str_repeat('i', count($item_ids)),
+            ...$item_ids
         );
 
+        self::run(
+            'DELETE FROM ' . self::TABLE . ' WHERE childid IN (' . self::placeholders(count($item_ids)) . ')',
+            str_repeat('i', count($item_ids)),
+            ...$item_ids
+        );
+
+        self::syncEdges($item_ids, false, []);
+        self::syncEdges($item_ids, true, $item_ids);
+    }
+
+    /** Read each indexed adjacency list in bounded primary/secondary-key pages. */
+    private static function syncEdges(array $item_ids, bool $incoming, array $rebuilt_parent_ids): void
+    {
+        $fixed = $incoming ? 'childId' : 'parentId';
+        $cursor_column = $incoming ? 'parentId' : 'childId';
+        $index = $incoming ? 'childId_parentId' : 'PRIMARY';
+        $group_cursor = 0;
+        $cursor = 0;
+        $excluded = $rebuilt_parent_ids === [] ? ''
+            : ' AND `Links`.`parentId` NOT IN (' . self::placeholders(count($rebuilt_parent_ids)) . ')';
         $select = mysqli_prepare(Database::connection(), '
 SELECT `Links`.`parentId`, `Links`.`childId`, `Links`.`description`,
         `ParentHosts`.`domain`, (`ParentHosts`.`domain` <> `ChildHosts`.`domain`) AS `external`
-    FROM `Links`
+    FROM `Links` FORCE INDEX (`' . $index . '`)
     INNER JOIN `Items` AS `ParentItems` ON `ParentItems`.`itemId` = `Links`.`parentId`
     INNER JOIN `Hosts` AS `ParentHosts` ON `ParentHosts`.`hostId` = `ParentItems`.`hostId`
     INNER JOIN `Items` AS `ChildItems` ON `ChildItems`.`itemId` = `Links`.`childId`
     INNER JOIN `Hosts` AS `ChildHosts` ON `ChildHosts`.`hostId` = `ChildItems`.`hostId`
-    WHERE `Links`.`parentId` IN (' . $placeholders . ')
-        OR `Links`.`childId` IN (' . $placeholders . ')
+    WHERE `Links`.`' . $fixed . '` IN (' . self::placeholders(count($item_ids)) . ')
+        AND (`Links`.`' . $fixed . '` > ?
+            OR (`Links`.`' . $fixed . '` = ? AND `Links`.`' . $cursor_column . '` > ?))' . $excluded . '
+    ORDER BY `Links`.`' . $fixed . '`, `Links`.`' . $cursor_column . '`
+    LIMIT 200
 ');
-        $values = array_merge($item_ids, $item_ids);
-        mysqli_stmt_bind_param($select, str_repeat('i', count($values)), ...$values);
-        mysqli_stmt_execute($select);
-        self::upsertRows(mysqli_fetch_all(mysqli_stmt_get_result($select), MYSQLI_ASSOC));
+        do {
+            $values = array_merge($item_ids, [$group_cursor, $group_cursor, $cursor], $rebuilt_parent_ids);
+            mysqli_stmt_bind_param($select, str_repeat('i', count($values)), ...$values);
+            mysqli_stmt_execute($select);
+            $rows = mysqli_fetch_all(mysqli_stmt_get_result($select), MYSQLI_ASSOC);
+            self::upsertRows($rows);
+
+            if ($rows !== []) {
+                $group_cursor = (int) $rows[array_key_last($rows)][$fixed];
+                $cursor = (int) $rows[array_key_last($rows)][$cursor_column];
+            }
+        } while (count($rows) === 200);
     }
 
     /** @param array<int, array<string, mixed>> $rows */

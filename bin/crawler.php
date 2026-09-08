@@ -704,8 +704,9 @@ $bodyText = HTMLLoader::extractBodyText($document);
 $description = $metadata['description'] ?? mb_substr($bodyText, 0, 500);
 $originalContentHash = $item -> contentHash;
 $originalRecrawlAfterSeconds = $item -> recrawlAfterSeconds;
+$content = new CrawlContent($bodyText, $html);
 
-$discovered = Database::transaction(function () use ($discoveries, $item, $contentType, $metadata, $description, $bodyText, $html, $noindex, $originalContentHash, $originalRecrawlAfterSeconds): array {
+$discovered = Database::transaction(function () use ($discoveries, $item, $contentType, $metadata, $description, $content, $noindex, $originalContentHash, $originalRecrawlAfterSeconds): array {
     $items = Item::findOrCreateManyByURL($discoveries);
     $links = [];
 
@@ -722,7 +723,7 @@ $discovered = Database::transaction(function () use ($discoveries, $item, $conte
     // markCrawled() does not compare against its rolled-back first attempt.
     $item -> contentHash = $originalContentHash;
     $item -> recrawlAfterSeconds = $originalRecrawlAfterSeconds;
-    $item -> markCrawled($contentType -> type, $metadata['title'], $description, $metadata['keywords'], $bodyText, $html, $noindex ? 1 : 0, false);
+    $item -> markCrawledContent($contentType -> type, $metadata['title'], $description, $metadata['keywords'], $content, $noindex ? 1 : 0, false);
 
     return $items;
 });

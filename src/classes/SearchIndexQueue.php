@@ -4,8 +4,22 @@ declare(strict_types=1);
 
 final class SearchIndexQueue
 {
+    private const FULL = 1;
+    private const PARTIAL = 2;
+
     /** @param int[] $item_ids */
     public static function record(array $item_ids, bool $sync_item, bool $sync_links): void
+    {
+        self::enqueue($item_ids, $sync_item ? self::FULL : 0, $sync_links ? self::FULL : 0);
+    }
+
+    /** @param int[] $item_ids */
+    public static function recordCounts(array $item_ids): void
+    {
+        self::enqueue($item_ids, self::PARTIAL, 0);
+    }
+
+    private static function enqueue(array $item_ids, int $sync_item, int $sync_links): void
     {
         $item_ids = array_values(array_unique(array_filter(array_map('intval', $item_ids), static fn (int $id): bool => $id > 0)));
 
@@ -20,8 +34,8 @@ final class SearchIndexQueue
 
             foreach ($chunk as $item_id) {
                 $values[] = $item_id;
-                $values[] = $sync_item ? 1 : 0;
-                $values[] = $sync_links ? 1 : 0;
+                $values[] = $sync_item;
+                $values[] = $sync_links;
                 $types .= 'iii';
             }
 
@@ -29,7 +43,7 @@ final class SearchIndexQueue
 INSERT INTO `SearchIndexQueue` (`itemId`, `syncItem`, `syncLinks`)
     VALUES ' . $rows . '
     ON DUPLICATE KEY UPDATE
-        `syncItem` = GREATEST(`syncItem`, VALUES(`syncItem`)),
+        `syncItem` = IF(`syncItem` = 1 OR VALUES(`syncItem`) = 1, 1, GREATEST(`syncItem`, VALUES(`syncItem`))),
         `syncLinks` = GREATEST(`syncLinks`, VALUES(`syncLinks`)),
         `generation` = `generation` + 1
 ');
@@ -39,6 +53,23 @@ INSERT INTO `SearchIndexQueue` (`itemId`, `syncItem`, `syncLinks`)
     }
 
     public static function processPending(int $limit = 20, bool $fail_on_error = false): int
+    {
+        // Every caller uses the same connection-owned lock, including the
+        // timer. A crashed consumer releases it without leaving a stale lease.
+        $lock = mysqli_query(Database::connection(), 'SELECT GET_LOCK(CONCAT(\'duskrail-index:\', DATABASE()), 0)');
+
+        if ((int) mysqli_fetch_row($lock)[0] !== 1) {
+            return 0;
+        }
+
+        try {
+            return self::processLocked($limit, $fail_on_error);
+        } finally {
+            mysqli_query(Database::connection(), 'SELECT RELEASE_LOCK(CONCAT(\'duskrail-index:\', DATABASE()))');
+        }
+    }
+
+    private static function processLocked(int $limit, bool $fail_on_error): int
     {
         $limit = max(1, min(1000, $limit));
         $result = mysqli_query(Database::connection(), '
@@ -50,21 +81,25 @@ SELECT `itemId`, `syncItem`, `syncLinks`, `generation`
         $rows = mysqli_fetch_all($result, MYSQLI_ASSOC);
         $item_ids = [];
         $link_ids = [];
+        $count_ids = [];
 
         foreach ($rows as $row) {
             $item_id = (int) $row['itemId'];
 
-            if ((int) $row['syncItem'] === 1) {
+            if ((int) $row['syncItem'] === self::FULL) {
                 $item_ids[] = $item_id;
+            } elseif ((int) $row['syncItem'] === self::PARTIAL) {
+                $count_ids[] = $item_id;
             }
 
-            if ((int) $row['syncLinks'] === 1) {
+            if ((int) $row['syncLinks'] === self::FULL) {
                 $link_ids[] = $item_id;
             }
         }
 
         try {
             ItemSearchIndex::syncIds($item_ids);
+            ItemSearchIndex::syncCounts($count_ids);
             LinkSearchIndex::syncItemIds($link_ids);
         } catch (\Throwable $exception) {
             if ($fail_on_error) {

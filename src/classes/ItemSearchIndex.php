@@ -78,6 +78,66 @@ SELECT `itemId`, `type`, `title`, `description`, `fullText`, `inc`
         }
     }
 
+    /** @param int[] $item_ids */
+    public static function syncCounts(array $item_ids): void
+    {
+        $item_ids = self::normalizedIds($item_ids);
+
+        if ($item_ids === []) {
+            return;
+        }
+
+        $placeholders = self::placeholders(count($item_ids));
+        $select = mysqli_prepare(Database::connection(), '
+SELECT `itemId`, `inc`, `title`, `description`
+    FROM `Items`
+    WHERE `itemId` IN (' . $placeholders . ')
+        AND ' . self::MARIA_SEARCHABLE_CONDITION . '
+');
+        mysqli_stmt_bind_param($select, str_repeat('i', count($item_ids)), ...$item_ids);
+        mysqli_stmt_execute($select);
+        $rows = mysqli_fetch_all(mysqli_stmt_get_result($select), MYSQLI_ASSOC);
+        $indexed = [];
+
+        foreach (self::rows(
+            'SELECT id, title, description FROM ' . self::TABLE . ' WHERE id IN (' . $placeholders . ') LIMIT ' . count($item_ids),
+            str_repeat('i', count($item_ids)),
+            ...$item_ids
+        ) as $row) {
+            $indexed[(int) $row['id']] = $row;
+        }
+
+        $full_ids = array_fill_keys($item_ids, true);
+        $counts = [];
+
+        foreach ($rows as $row) {
+            $item_id = (int) $row['itemId'];
+
+            // Discovery may also fill an empty title or description. Keep
+            // that change, and recreate documents missing from the index.
+            if (!isset($indexed[$item_id])
+                || (string) ($row['title'] ?? '') !== (string) $indexed[$item_id]['title']
+                || (string) ($row['description'] ?? '') !== (string) $indexed[$item_id]['description']
+            ) {
+                continue;
+            }
+
+            unset($full_ids[$item_id]);
+            $counts[(int) $row['inc']][] = $item_id;
+        }
+
+        foreach ($counts as $count => $ids) {
+            self::run(
+                'UPDATE ' . self::TABLE . ' SET inc = ? WHERE id IN (' . self::placeholders(count($ids)) . ')',
+                'i' . str_repeat('i', count($ids)),
+                $count,
+                ...$ids
+            );
+        }
+
+        self::syncIds(array_keys($full_ids));
+    }
+
     /** @return array<int, array{itemId: int, inc: int, relevance: float}> */
     public static function candidates(string $query, bool $images, int $limit): array
     {

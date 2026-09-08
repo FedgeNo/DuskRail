@@ -26,6 +26,7 @@
     // each tile's aspect ratio only exists here - it's a fact about the
     // image, not something the DOM has any way to store or recover.
     var imageTiles = [];
+    var imageLayoutFrame = null;
 
     // The tile whose image is in the preview column, if any - kept here so
     // the arrow keys know where to move from and Escape knows what to clear.
@@ -110,8 +111,8 @@
 
         if (this.result.thumbnailURL) {
             var thumb = document.createElement('img');
-            thumb.src = this.result.thumbnailURL;
-            thumb.alt = this.result.title || '';
+            thumb.setAttribute('src', this.result.thumbnailURL);
+            thumb.setAttribute('alt', this.result.title || '');
             tile.appendChild(thumb);
         }
 
@@ -315,24 +316,6 @@
         // white-space: nowrap + text-overflow: ellipsis) - this just strips
         // the protocol, since that part is never worth the width it costs.
         return url.replace(/^[a-z]+:\/\//i, '');
-    }
-
-    function loadImageDimensions(src) {
-        return new Promise(function (resolve) {
-            if (!src) {
-                resolve({width: 1, height: 1});
-                return;
-            }
-
-            var probe = new Image();
-            probe.onload = function () {
-                resolve({width: probe.naturalWidth || 1, height: probe.naturalHeight || 1});
-            };
-            probe.onerror = function () {
-                resolve({width: 1, height: 1});
-            };
-            probe.src = src;
-        });
     }
 
     function tileFor(element) {
@@ -561,42 +544,25 @@
                     return;
                 }
 
-                Promise.all(items.map(function (result) {
-                    return loadImageDimensions(result.thumbnailURL);
-                })).then(function (dimensions) {
-                    if (query !== currentQuery || type !== currentType) {
-                        return;
-                    }
+                if (!append) {
+                    clearElement(results);
+                    results.setAttribute('class', 'ImageGrid');
+                    imageTiles = [];
+                    preview.textContent = PREVIEW_PLACEHOLDER;
+                }
 
-                    if (!append) {
-                        clearElement(results);
-                        results.className = 'ImageGrid';
-                        imageTiles = [];
-
-                        // Only shown once there are actually image results to
-                        // preview - items.length is guaranteed > 0 here, since
-                        // the zero-results case above already returned early.
-                        preview.textContent = PREVIEW_PLACEHOLDER;
-                    }
-
-                    // Lay out only this page's tiles and append them as their
-                    // own justified rows below whatever's already there -
-                    // earlier pages keep their existing layout rather than
-                    // being torn down and re-flowed on every load. Each page
-                    // justifies independently, so its last (partial) row stays
-                    // at the target height and the next page starts fresh.
-                    var tiles = items.map(function (result, index) {
-                        var tile = new ImageTile(result, dimensions[index].width / dimensions[index].height);
-                        tile.toDOM();
-                        return tile;
-                    });
-
-                    imageTiles = imageTiles.concat(tiles);
-                    layoutJustifiedGrid(results, tiles);
-
-                    loadingMore = false;
-                    maybeLoadMore();
+                // Reserve space immediately; each actual thumbnail supplies
+                // its ratio as it loads, without a separate probing image.
+                var tiles = items.map(function (result) {
+                    var tile = new ImageTile(result, 1);
+                    tile.toDOM();
+                    return tile;
                 });
+
+                imageTiles = imageTiles.concat(tiles);
+                layoutJustifiedGrid(results, tiles);
+                loadingMore = false;
+                maybeLoadMore();
             })
             .catch(function (error) {
                 if (query !== currentQuery || type !== currentType) {
@@ -680,6 +646,37 @@
             selectTile(tile);
         }
     });
+
+    // Image load does not bubble; capture lets one listener handle every
+    // thumbnail. Coalesce cached-image bursts into one layout per frame.
+    document.addEventListener('load', function (event) {
+        if (event.target.tagName !== 'IMG') {
+            return;
+        }
+
+        var element = event.target.closest('.ImageTile');
+        var tile = element !== null ? tileFor(element) : null;
+
+        if (tile === null || !event.target.naturalWidth || !event.target.naturalHeight) {
+            return;
+        }
+
+        var ratio = event.target.naturalWidth / event.target.naturalHeight;
+
+        if (ratio === tile.aspectRatio) {
+            return;
+        }
+
+        tile.aspectRatio = ratio;
+
+        if (imageLayoutFrame === null) {
+            imageLayoutFrame = window.requestAnimationFrame(function () {
+                imageLayoutFrame = null;
+                relayoutImageGrid();
+                maybeLoadMore();
+            });
+        }
+    }, true);
 
     document.addEventListener('keydown', function (event) {
         // Arrow keys and Escape drive the preview once an image is selected -
