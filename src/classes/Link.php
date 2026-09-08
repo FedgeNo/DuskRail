@@ -44,7 +44,7 @@ INSERT IGNORE INTO `Links` (`parentId`, `childId`, `description`)
         mysqli_stmt_bind_param($insert, 'iis', $parentId, $childId, $description);
         mysqli_stmt_execute($insert);
 
-        SearchIndexQueue::record([$parentId], false, true);
+        SearchIndexQueue::recordOutgoingLinks([$parentId]);
     }
 
     /**
@@ -91,7 +91,7 @@ INSERT IGNORE INTO `Links` (`parentId`, `childId`, `description`)
             mysqli_stmt_execute($insert);
         }
 
-        SearchIndexQueue::record([$parentId], false, true);
+        SearchIndexQueue::recordOutgoingLinks([$parentId]);
 
         return $newChildIds;
     }

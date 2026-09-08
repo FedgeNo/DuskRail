@@ -14,9 +14,16 @@ RateLimit::enforceThumbnailAPI();
 
 $item_id = (int) ($_GET['item'] ?? 0);
 $path = (string) parse_url((string) ($_SERVER['REQUEST_URI'] ?? ''), PHP_URL_PATH);
-$payload = $item_id > 0 && $path === ImageLoader::thumbnailURL($item_id, 'image/jpeg')
-    ? ThumbnailCache::thumbnail($item_id)
-    : null;
+try {
+    $payload = $item_id > 0 && $path === ImageLoader::thumbnailURL($item_id, 'image/jpeg')
+        ? ThumbnailCache::thumbnail($item_id)
+        : null;
+} catch (ThumbnailBusy) {
+    http_response_code(503);
+    header('Retry-After: 2');
+    header('Cache-Control: no-store');
+    exit;
+}
 
 while (ob_get_level() > 0) {
     ob_end_clean();

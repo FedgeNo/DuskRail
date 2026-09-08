@@ -78,6 +78,10 @@ $watch -> addContent($feed);
 $page -> addContent($watch);
 
 $script = new Script();
+$script -> src = ServerURL::absolute('/thumbnail.js');
+$page -> addContent($script);
+
+$script = new Script();
 $script -> src = ServerURL::absolute('/watch.js');
 $page -> addContent($script);
 

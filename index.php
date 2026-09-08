@@ -146,6 +146,10 @@ $layout -> addContent($preview);
 $page -> addContent($layout);
 
 $script = new Script();
+$script -> src = ServerURL::absolute('/thumbnail.js');
+$page -> addContent($script);
+
+$script = new Script();
 $script -> src = ServerURL::absolute('/search.js');
 $page -> addContent($script);
 

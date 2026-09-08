@@ -12,6 +12,7 @@ final class ThumbnailCache
     private const MAXIMUM_REDIRECTS = 3;
     private const FAILURE_COOLDOWN_SECONDS = 300;
     private const CONCURRENT_FETCHES_PER_CLIENT = 18;
+    private const CONCURRENT_PROCESSING = 18;
 
     private static ?bool $writeCapacity = null;
 
@@ -63,7 +64,7 @@ final class ThumbnailCache
         $item_lock = 'thumbnail:' . $item_id;
 
         if (!self::acquireLock($item_lock, self::LOCK_TIMEOUT_SECONDS)) {
-            return null;
+            throw new ThumbnailBusy('Thumbnail is already being processed.');
         }
 
         try {
@@ -84,16 +85,25 @@ final class ThumbnailCache
             $slot = self::acquireFetchSlot();
 
             if ($slot === null) {
-                return null;
+                throw new ThumbnailBusy('Thumbnail client capacity is busy.');
             }
 
             try {
-                $bytes = self::fetch((string) $item -> url);
+                $global_slot = self::acquireProcessingSlot();
+
+                if ($global_slot === null) {
+                    throw new ThumbnailBusy('Thumbnail processing capacity is busy.');
+                }
+
+                try {
+                    $bytes = self::fetch((string) $item -> url);
+                    $thumbnail = $bytes !== null ? ImageLoader::thumbnailBytes($bytes) : null;
+                } finally {
+                    self::releaseLock($global_slot);
+                }
             } finally {
                 self::releaseLock($slot);
             }
-
-            $thumbnail = $bytes !== null ? ImageLoader::thumbnailBytes($bytes) : null;
 
             if ($thumbnail === null) {
                 self::recordFailure($item_id);
@@ -235,6 +245,23 @@ DELETE FROM `ThumbnailFetchFailures`
 ');
         mysqli_stmt_bind_param($delete, 'i', $item_id);
         mysqli_stmt_execute($delete);
+    }
+
+    private static function acquireProcessingSlot(): ?string
+    {
+        // Randomize the first probe so concurrent clients do not all compete
+        // for the first slot while later slots remain available.
+        $start = random_int(0, self::CONCURRENT_PROCESSING - 1);
+
+        for ($offset = 0; $offset < self::CONCURRENT_PROCESSING; $offset++) {
+            $key = 'thumbnail-global:' . (($start + $offset) % self::CONCURRENT_PROCESSING);
+
+            if (self::acquireLock($key, 0)) {
+                return $key;
+            }
+        }
+
+        return null;
     }
 
     private static function acquireFetchSlot(): ?string

@@ -1319,6 +1319,36 @@ END
 SQL);
             },
         ],
+        [
+            'name' => 'track_link_domain_revisions',
+            'check' => fn () => false,
+            'apply' => function (): void {
+                run_sql(<<<'SQL'
+CREATE TABLE IF NOT EXISTS `LinkIndexRevisions` (
+    `itemId` int(10) unsigned NOT NULL,
+    `domainRevision` bigint(20) unsigned NOT NULL,
+    PRIMARY KEY (`itemId`),
+    CONSTRAINT `LinkIndexRevisions_item` FOREIGN KEY (`itemId`) REFERENCES `Items` (`itemId`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+SQL);
+                run_sql(<<<'SQL'
+INSERT INTO `Settings` (`name`, `value`) VALUES ('linkDomainRevision', '0')
+    ON DUPLICATE KEY UPDATE `name` = VALUES(`name`)
+SQL);
+                run_sql(<<<'SQL'
+CREATE OR REPLACE TRIGGER `Hosts_link_domain_revision_update`
+AFTER UPDATE ON `Hosts`
+FOR EACH ROW
+BEGIN
+    IF BINARY OLD.`domain` <> BINARY NEW.`domain` THEN
+        UPDATE `Settings`
+            SET `value` = CAST(`value` AS UNSIGNED) + 1
+            WHERE `name` = 'linkDomainRevision';
+    END IF;
+END
+SQL);
+            },
+        ],
     ];
 }
 

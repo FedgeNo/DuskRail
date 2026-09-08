@@ -47,6 +47,14 @@ CREATE TABLE `Items` (
   CONSTRAINT `Items_ibfk_1` FOREIGN KEY (`hostId`) REFERENCES `Hosts` (`hostId`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- Revision of the last complete link-metadata refresh, populated lazily.
+CREATE TABLE IF NOT EXISTS `LinkIndexRevisions` (
+    `itemId` int(10) unsigned NOT NULL,
+    `domainRevision` bigint(20) unsigned NOT NULL,
+    PRIMARY KEY (`itemId`),
+    CONSTRAINT `LinkIndexRevisions_item` FOREIGN KEY (`itemId`) REFERENCES `Items` (`itemId`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 -- Exact catalogue totals maintained as rows enter, leave, or change state.
 -- counterId=1 is the sole row. A fresh empty database is initialized here;
 -- an existing catalogue is initialized by the deliberate backfill command.
@@ -81,7 +89,7 @@ CREATE TABLE `Links` (
 -- derived Manticore indexes. No foreign key: deleting an Item is one of the
 -- events this table must retain long enough to deliver.
 -- syncItem: 0=none, 1=full document, 2=inbound count (with metadata repair).
--- syncLinks: 0=none, 1=all incident edges.
+-- syncLinks: 0=none, 1=all incident edges, 2=outgoing edges (full after domain changes).
 -- Full work takes precedence when pending requests are combined.
 CREATE TABLE `SearchIndexQueue` (
   `itemId` int(10) unsigned NOT NULL,
@@ -120,6 +128,21 @@ CREATE TABLE `Settings` (
   PRIMARY KEY (`settingId`),
   UNIQUE KEY `name` (`name`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+INSERT INTO `Settings` (`name`, `value`) VALUES ('linkDomainRevision', '0');
+
+DELIMITER $$
+CREATE OR REPLACE TRIGGER `Hosts_link_domain_revision_update`
+AFTER UPDATE ON `Hosts`
+FOR EACH ROW
+BEGIN
+    IF BINARY OLD.`domain` <> BINARY NEW.`domain` THEN
+        UPDATE `Settings`
+            SET `value` = CAST(`value` AS UNSIGNED) + 1
+            WHERE `name` = 'linkDomainRevision';
+    END IF;
+END$$
+DELIMITER ;
 
 -- Request budgets for the public endpoints (see RateLimit). One row per
 -- (budget, caller, minute); the primary key is what makes counting a request

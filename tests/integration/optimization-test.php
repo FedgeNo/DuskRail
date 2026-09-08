@@ -157,9 +157,54 @@ SearchIndexQueue::record([$child -> itemId, $parent -> itemId], false, true);
 drain();
 check('incoming and outgoing rebuild preserves all edges', 810, (int) mysqli_fetch_row(mysqli_query($search, 'SELECT COUNT(*) FROM duskrail_links'))[0]);
 check('external-domain ranking survives rebuild', 1, LinkSearchIndex::matches('widgets', [$child -> itemId])[$child -> itemId]);
+
+$pool = LinkSearchIndex::focusedCandidates('widgets', 1000);
+$searches = (int) mysqli_fetch_row(mysqli_query($search, 'SHOW STATUS LIKE \'command_search\''))[1];
+check('cached focused pool preserves rank and score types', $pool, LinkSearchIndex::focusedCandidates('widgets', 1000));
+check('cached pool avoids another ranking query', $searches, (int) mysqli_fetch_row(mysqli_query($search, 'SHOW STATUS LIKE \'command_search\''))[1]);
+check('changing the focused limit returns the requested prefix', array_slice($pool, 0, 5, true), LinkSearchIndex::focusedCandidates('widgets', 5));
+check('changing topic cannot reuse another topic pool', [], LinkSearchIndex::focusedCandidates('absentword', 1000));
+LinkSearchIndex::focusedCandidates('widgets', 1000);
+LinkSearchIndex::clear();
+check('clearing the index invalidates the focused pool', [], LinkSearchIndex::focusedCandidates('widgets', 1000));
+LinkSearchIndex::upsertRows([['parentId' => $parent -> itemId, 'childId' => $child -> itemId, 'description' => 'widgets', 'domain' => 'example.org', 'external' => 1]]);
+check('direct backfill writes invalidate the focused pool', [$child -> itemId], array_keys(LinkSearchIndex::focusedCandidates('widgets', 1000)));
+// A concurrent writer must not make its intermediate result reusable.
+mysqli_query($other, 'SELECT GET_LOCK(CONCAT(\'duskrail-link-index:\', DATABASE()), 0)');
+check('busy cache lock falls back to normal ranking', [$child -> itemId], array_keys(LinkSearchIndex::focusedCandidates('widgets', 1000)));
+mysqli_query($other, 'SELECT RELEASE_LOCK(CONCAT(\'duskrail-link-index:\', DATABASE()))');
+SearchIndexQueue::record(array_merge([$parent -> itemId, $child -> itemId], array_keys($links)), false, true);
+drain();
+check('queued link writes invalidate the focused pool', count($pool), count(LinkSearchIndex::focusedCandidates('widgets', 1000)));
 Link::createMany($parent -> itemId, $links);
 check('rediscovery still repairs derived link metadata', true, SearchIndexQueue::hasPending());
 drain();
+
+$source = discover('https://a.example.org/source');
+$target = discover('https://b.example.org/target');
+Link::create($source -> itemId, $target -> itemId, 'domainprobe');
+SearchIndexQueue::record([$target -> itemId], false, true);
+drain();
+check('same-domain incoming link is initially internal', [], LinkSearchIndex::matches('domainprobe', [$target -> itemId]));
+$replaces = (int) mysqli_fetch_row(mysqli_query($search, 'SHOW STATUS LIKE \'command_replace\''))[1];
+SearchIndexQueue::recordOutgoingLinks([$target -> itemId]);
+drain();
+check('ordinary outgoing refresh does not rewrite incoming links', $replaces, (int) mysqli_fetch_row(mysqli_query($search, 'SHOW STATUS LIKE \'command_replace\''))[1]);
+
+// Supply a changed suffix list, then let the real host upsert repair its
+// stored domain. No fixture row is edited directly to simulate this event.
+$rules_property = new ReflectionProperty(PublicSuffixList::class, 'rules');
+$rules = $rules_property -> getValue();
+$changed_rules = $rules;
+$changed_rules['example.org'] = 'normal';
+$rules_property -> setValue(null, $changed_rules);
+$revision = Setting::value('linkDomainRevision');
+Host::findOrCreateByName('a.example.org');
+$rules_property -> setValue(null, $rules);
+check('host repair advances domain revision', (int) $revision + 1, (int) Setting::value('linkDomainRevision'));
+SearchIndexQueue::recordOutgoingLinks([$target -> itemId]);
+drain();
+check('domain changes force incoming metadata repair', 1, LinkSearchIndex::matches('domainprobe', [$target -> itemId])[$target -> itemId]);
 
 // Failures retain work and release the cross-process lock.
 mysqli_query($search, 'DROP TABLE duskrail_links');
@@ -172,6 +217,9 @@ try {
 }
 check('index failure is surfaced', true, $failed);
 check('failed work remains queued', true, SearchIndexQueue::hasPending());
+check('failed index writes invalidate focused cache', '', Setting::value('focusedCrawlCandidates'));
+check('failure releases focused cache lock', 1, (int) mysqli_fetch_row(mysqli_query($other, 'SELECT GET_LOCK(CONCAT(\'duskrail-link-index:\', DATABASE()), 0)'))[0]);
+mysqli_query($other, 'SELECT RELEASE_LOCK(CONCAT(\'duskrail-link-index:\', DATABASE()))');
 check('failure releases consumer lock', 1, (int) mysqli_fetch_row(mysqli_query($other, 'SELECT GET_LOCK(CONCAT(\'duskrail-index:\', DATABASE()), 0)'))[0]);
 mysqli_query($other, 'SELECT RELEASE_LOCK(CONCAT(\'duskrail-index:\', DATABASE()))');
 

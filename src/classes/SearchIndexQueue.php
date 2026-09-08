@@ -19,6 +19,12 @@ final class SearchIndexQueue
         self::enqueue($item_ids, self::PARTIAL, 0);
     }
 
+    /** @param int[] $item_ids */
+    public static function recordOutgoingLinks(array $item_ids): void
+    {
+        self::enqueue($item_ids, 0, self::PARTIAL);
+    }
+
     private static function enqueue(array $item_ids, int $sync_item, int $sync_links): void
     {
         $item_ids = array_values(array_unique(array_filter(array_map('intval', $item_ids), static fn (int $id): bool => $id > 0)));
@@ -44,7 +50,7 @@ INSERT INTO `SearchIndexQueue` (`itemId`, `syncItem`, `syncLinks`)
     VALUES ' . $rows . '
     ON DUPLICATE KEY UPDATE
         `syncItem` = IF(`syncItem` = 1 OR VALUES(`syncItem`) = 1, 1, GREATEST(`syncItem`, VALUES(`syncItem`))),
-        `syncLinks` = GREATEST(`syncLinks`, VALUES(`syncLinks`)),
+        `syncLinks` = IF(`syncLinks` = 1 OR VALUES(`syncLinks`) = 1, 1, GREATEST(`syncLinks`, VALUES(`syncLinks`))),
         `generation` = `generation` + 1
 ');
             mysqli_stmt_bind_param($insert, $types, ...$values);
@@ -82,6 +88,7 @@ SELECT `itemId`, `syncItem`, `syncLinks`, `generation`
         $item_ids = [];
         $link_ids = [];
         $count_ids = [];
+        $outgoing_ids = [];
 
         foreach ($rows as $row) {
             $item_id = (int) $row['itemId'];
@@ -94,13 +101,15 @@ SELECT `itemId`, `syncItem`, `syncLinks`, `generation`
 
             if ((int) $row['syncLinks'] === self::FULL) {
                 $link_ids[] = $item_id;
+            } elseif ((int) $row['syncLinks'] === self::PARTIAL) {
+                $outgoing_ids[] = $item_id;
             }
         }
 
         try {
             ItemSearchIndex::syncIds($item_ids);
             ItemSearchIndex::syncCounts($count_ids);
-            LinkSearchIndex::syncItemIds($link_ids);
+            LinkSearchIndex::syncItemIds($link_ids, $outgoing_ids);
         } catch (\Throwable $exception) {
             if ($fail_on_error) {
                 throw $exception;

@@ -9,9 +9,12 @@ Create a private directory with `mktemp -d /tmp/duskrail-optimization-tests.XXXX
 
 Run `php tests/integration/optimization-test.php /tmp/duskrail-optimization-tests.XXXXXX` with the actual directory. The test checks MariaDB's data directory before creating a fresh test database, and replaces only the disposable Manticore instance's `duskrail_*` tables. Stop both disposable instances and remove their scratch directory afterwards.
 
+`php tests/integration/thumbnail-budget-test.php /tmp/duskrail-optimization-tests.XXXXXX` requires only the disposable MariaDB instance. It uses network/decoder stubs to verify shared lock ownership throughout processing, capacity recovery, and exception cleanup without fetching remote images.
+
 The dependency-free suites run separately:
 
 ```sh
 php bin/test.php
 node tests/search-grid-test.js
+node tests/thumbnail-retry-test.js
 ```
