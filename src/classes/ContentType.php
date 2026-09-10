@@ -8,8 +8,7 @@ declare(strict_types=1);
  * XHTML served as XML, ...) - isHTML() covers the ones actually worth
  * treating as HTML rather than tracking each spelling at every call site.
  */
-class ContentType
-{
+class ContentType {
     private const HTML_TYPES = [
         'text/html',
         'application/xhtml+xml',
@@ -18,8 +17,7 @@ class ContentType
     public string $type;
     public ?string $charset = null;
 
-    public function __construct(string $headerValue)
-    {
+    public function __construct(string $headerValue) {
         $segments = explode(';', $headerValue);
 
         $this -> type = strtolower(trim($segments[0]));
@@ -32,23 +30,19 @@ class ContentType
         }
     }
 
-    public function isHTML(): bool
-    {
+    public function isHTML(): bool {
         return in_array($this -> type, self::HTML_TYPES, true);
     }
 
-    public function isImage(): bool
-    {
+    public function isImage(): bool {
         return str_starts_with($this -> type, 'image/');
     }
 
-    public function isPDF(): bool
-    {
+    public function isPDF(): bool {
         return $this -> type === 'application/pdf';
     }
 
-    public function isPlainText(): bool
-    {
+    public function isPlainText(): bool {
         return $this -> type === 'text/plain';
     }
 }

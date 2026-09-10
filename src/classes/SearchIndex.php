@@ -2,12 +2,10 @@
 
 declare(strict_types=1);
 
-abstract class SearchIndex
-{
+abstract class SearchIndex {
     private static ?\mysqli $connection = null;
 
-    protected static function connection(): \mysqli
-    {
+    protected static function connection(): \mysqli {
         if (self::$connection !== null) {
             return self::$connection;
         }
@@ -37,8 +35,7 @@ abstract class SearchIndex
         return self::$connection;
     }
 
-    protected static function rows(string $sql, string $types = '', mixed ...$values): array
-    {
+    protected static function rows(string $sql, string $types = '', mixed ...$values): array {
         try {
             $statement = mysqli_prepare(self::connection(), $sql);
 
@@ -58,13 +55,11 @@ abstract class SearchIndex
         }
     }
 
-    protected static function run(string $sql, string $types = '', mixed ...$values): void
-    {
+    protected static function run(string $sql, string $types = '', mixed ...$values): void {
         self::rows($sql, $types, ...$values);
     }
 
-    public static function installSchema(string $path): void
-    {
+    public static function installSchema(string $path): void {
         $sql = file_get_contents($path);
 
         if ($sql === false) {
@@ -82,8 +77,7 @@ abstract class SearchIndex
         }
     }
 
-    protected static function placeholders(int $count): string
-    {
+    protected static function placeholders(int $count): string {
         return implode(', ', array_fill(0, $count, '?'));
     }
 
@@ -93,8 +87,7 @@ abstract class SearchIndex
      * current natural-language any-word behavior; quoted groups stay exact
      * phrases.
      */
-    public static function matchExpression(string $query): string
-    {
+    public static function matchExpression(string $query): string {
         preg_match_all('/"([^"]+)"|([\p{L}\p{N}]+)/u', mb_substr(trim($query), 0, SearchResults::MAX_QUERY_LENGTH), $matches, PREG_SET_ORDER);
         $parts = [];
 

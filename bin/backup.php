@@ -133,8 +133,7 @@ echo 'Done.
 ';
 
 /** A real DuskRail dump necessarily contains at least one CREATE TABLE. */
-function backup_contains_schema(string $path): bool
-{
+function backup_contains_schema(string $path): bool {
     if (!is_file($path) || filesize($path) === 0) {
         return false;
     }

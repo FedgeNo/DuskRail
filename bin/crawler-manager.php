@@ -90,8 +90,7 @@ if (function_exists('pcntl_async_signals')) {
     });
 }
 
-function delete_item_by_id(int $itemId): void
-{
+function delete_item_by_id(int $itemId): void {
     // Recorded as dead, not just removed: a URL that hangs a worker three
     // times running will do it again the moment anything links to it, and
     // that's three more 30-second stalls each time it's rediscovered.
@@ -110,13 +109,11 @@ function delete_item_by_id(int $itemId): void
  * carries deliberately restrictive permissions: bin/install.php grants only
  * the checkout owner and crawler service account access to it.
  */
-function clear_chrome_endpoint(): void
-{
+function clear_chrome_endpoint(): void {
     file_put_contents(CHROME_DEVTOOLS_ENDPOINT_FILE, '');
 }
 
-function launch_chrome(OutboundProxyProcess $proxy): ?ChromeProcess
-{
+function launch_chrome(OutboundProxyProcess $proxy): ?ChromeProcess {
     try {
         $chrome = new ChromeProcess($proxy -> hostAndPort);
     } catch (\Throwable $exception) {
@@ -141,8 +138,7 @@ function launch_chrome(OutboundProxyProcess $proxy): ?ChromeProcess
  * Returns false during that drain, during launch cooldown, or after a failed
  * launch, and true only while a usable current generation exists.
  */
-function ensure_current_chrome_generation(array &$chromeInstances, int &$currentGeneration, float &$lastAttemptAt, OutboundProxyProcess $proxy): bool
-{
+function ensure_current_chrome_generation(array &$chromeInstances, int &$currentGeneration, float &$lastAttemptAt, OutboundProxyProcess $proxy): bool {
     $current = $chromeInstances[$currentGeneration] ?? null;
 
     if ($current !== null && $current['process'] -> isHealthy() && $current['process'] -> ageSeconds() < MAX_CHROME_AGE_SECONDS) {
@@ -188,8 +184,7 @@ function ensure_current_chrome_generation(array &$chromeInstances, int &$current
  * Drops one worker's claim on its generation. Rotation observes refCount zero
  * on the next manager tick and shuts down the browser before replacing it.
  */
-function release_chrome_reference(array &$chromeInstances, int $generation): void
-{
+function release_chrome_reference(array &$chromeInstances, int $generation): void {
     if (!isset($chromeInstances[$generation])) {
         return;
     }
@@ -203,8 +198,7 @@ function release_chrome_reference(array &$chromeInstances, int $generation): voi
  * as its only argument so it knows which per-slot "what am I working on"
  * file to write (see CURRENT_CRAWL_ITEM_FILE usage in bin/crawler.php).
  */
-function start_worker(int $slot): array
-{
+function start_worker(int $slot): array {
     $pipes = [];
     // PHP_BINARY, not "php" - whichever interpreter is running this manager
     // is the one whose extensions and version were checked at install time,
@@ -239,8 +233,7 @@ function start_worker(int $slot): array
  * chunks straight through would otherwise interleave partial lines from
  * different workers into unreadable output.
  */
-function emit_lines(int $slot, string &$buffer, string $chunk, $target): void
-{
+function emit_lines(int $slot, string &$buffer, string $chunk, $target): void {
     if ($chunk === '') {
         return;
     }
@@ -256,8 +249,7 @@ function emit_lines(int $slot, string &$buffer, string $chunk, $target): void
     }
 }
 
-function flush_buffer(int $slot, string &$buffer, $target): void
-{
+function flush_buffer(int $slot, string &$buffer, $target): void {
     if ($buffer !== '') {
         fwrite($target, '[' . $slot . '] ' . $buffer . '
 ');

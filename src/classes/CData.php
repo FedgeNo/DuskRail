@@ -8,14 +8,11 @@ declare(strict_types=1);
  * string content item would be. Drop it into any HTMLObject's contents[]
  * array (handled by contentToNode()).
  */
-class CData
-{
-    public function __construct(public readonly string $text)
-    {
+class CData {
+    public function __construct(public readonly string $text) {
     }
 
-    public function toNode(): \DOMNode
-    {
+    public function toNode(): \DOMNode {
         $document = HTMLObject::currentDocument();
 
         // A CDATA section can't contain the literal sequence ']]>' - it would

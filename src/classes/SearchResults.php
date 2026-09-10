@@ -28,8 +28,7 @@ declare(strict_types=1);
  * semantics, and operator punctuation from public input is discarded before
  * the expression reaches Manticore.
  */
-class SearchResults
-{
+class SearchResults {
     public const PAGE_SIZE = 50;
     public const MAX_QUERY_LENGTH = 256;
 
@@ -57,8 +56,7 @@ class SearchResults
     public string $type;
     public int $offset;
 
-    public function __construct(string $query, string $type, int $offset)
-    {
+    public function __construct(string $query, string $type, int $offset) {
         $this -> query = $query;
         $this -> type = $type === 'image' ? 'image' : 'html';
         $this -> offset = max(0, $offset);
@@ -78,8 +76,7 @@ class SearchResults
         }
     }
 
-    public function toJSON(): array
-    {
+    public function toJSON(): array {
         return [
             'results' => array_map(static fn (SearchResult $result): array => $result -> toJSON(), $this -> results),
             'hasMore' => $this -> hasMore,
@@ -87,8 +84,7 @@ class SearchResults
     }
 
     /** Manticore ranks a bounded pool; MariaDB hydrates only the final page. */
-    private function rows(): array
-    {
+    private function rows(): array {
         $candidates = ItemSearchIndex::candidates(
             $this -> query,
             $this -> type === 'image',
@@ -172,8 +168,7 @@ SELECT `Items`.`itemId`, `Items`.`url`, `Items`.`type`, `Items`.`title`, `Items`
      * back to the whole query, which simply finds nothing and lets the
      * description stand in.
      */
-    private function firstSearchWord(): string
-    {
+    private function firstSearchWord(): string {
         $bare = str_replace(['"', '+', '-', '~', '<', '>', '(', ')', '*'], ' ', $this -> query);
 
         foreach (explode(' ', $bare) as $word) {

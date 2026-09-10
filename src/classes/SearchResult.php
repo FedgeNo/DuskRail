@@ -6,8 +6,7 @@ declare(strict_types=1);
  * One row of a SearchResults page - the columns the result list actually
  * renders, plus the ranking signals it was ordered by.
  */
-class SearchResult
-{
+class SearchResult {
     // How much of a description a result card shows. Long enough to judge a
     // result by, short enough that fifty of them stay scannable.
     private const DESCRIPTION_LENGTH = 500;
@@ -30,8 +29,7 @@ class SearchResult
     public ?int $matchPosition = null;
     public ?string $snippet = null;
 
-    public static function fromRow(array $row): self
-    {
+    public static function fromRow(array $row): self {
         $result = new self();
 
         $result -> itemId = (int) $row['itemId'];
@@ -48,8 +46,7 @@ class SearchResult
         return $result;
     }
 
-    public function toJSON(): array
-    {
+    public function toJSON(): array {
         return [
             'itemId' => $this -> itemId,
             'url' => $this -> url,
@@ -67,8 +64,7 @@ class SearchResult
      * page says about itself; the snippet tells you why it matched, which is
      * the more useful thing once there's a match to show.
      */
-    private function displayText(): ?string
-    {
+    private function displayText(): ?string {
         if ($this -> snippet === null) {
             return Text::truncate($this -> description, self::DESCRIPTION_LENGTH);
         }

@@ -2,31 +2,26 @@
 
 declare(strict_types=1);
 
-final class SearchIndexQueue
-{
+final class SearchIndexQueue {
     private const FULL = 1;
     private const PARTIAL = 2;
 
     /** @param int[] $item_ids */
-    public static function record(array $item_ids, bool $sync_item, bool $sync_links): void
-    {
+    public static function record(array $item_ids, bool $sync_item, bool $sync_links): void {
         self::enqueue($item_ids, $sync_item ? self::FULL : 0, $sync_links ? self::FULL : 0);
     }
 
     /** @param int[] $item_ids */
-    public static function recordCounts(array $item_ids): void
-    {
+    public static function recordCounts(array $item_ids): void {
         self::enqueue($item_ids, self::PARTIAL, 0);
     }
 
     /** @param int[] $item_ids */
-    public static function recordOutgoingLinks(array $item_ids): void
-    {
+    public static function recordOutgoingLinks(array $item_ids): void {
         self::enqueue($item_ids, 0, self::PARTIAL);
     }
 
-    private static function enqueue(array $item_ids, int $sync_item, int $sync_links): void
-    {
+    private static function enqueue(array $item_ids, int $sync_item, int $sync_links): void {
         $item_ids = array_values(array_unique(array_filter(array_map('intval', $item_ids), static fn (int $id): bool => $id > 0)));
 
         if ($item_ids === [] || (!$sync_item && !$sync_links)) {
@@ -58,8 +53,7 @@ INSERT INTO `SearchIndexQueue` (`itemId`, `syncItem`, `syncLinks`)
         }
     }
 
-    public static function processPending(int $limit = 20, bool $fail_on_error = false): int
-    {
+    public static function processPending(int $limit = 20, bool $fail_on_error = false): int {
         // Every caller uses the same connection-owned lock, including the
         // timer. A crashed consumer releases it without leaving a stale lease.
         $lock = mysqli_query(Database::connection(), 'SELECT GET_LOCK(CONCAT(\'duskrail-index:\', DATABASE()), 0)');
@@ -75,8 +69,7 @@ INSERT INTO `SearchIndexQueue` (`itemId`, `syncItem`, `syncLinks`)
         }
     }
 
-    private static function processLocked(int $limit, bool $fail_on_error): int
-    {
+    private static function processLocked(int $limit, bool $fail_on_error): int {
         $limit = max(1, min(1000, $limit));
         $result = mysqli_query(Database::connection(), '
 SELECT `itemId`, `syncItem`, `syncLinks`, `generation`
@@ -141,8 +134,7 @@ DELETE FROM `SearchIndexQueue`
         return count($rows);
     }
 
-    public static function hasPending(): bool
-    {
+    public static function hasPending(): bool {
         $result = mysqli_query(Database::connection(), '
 SELECT 1
     FROM `SearchIndexQueue`

@@ -43,8 +43,7 @@ ItemSearchIndex::clear();
 LinkSearchIndex::clear();
 
 $passed = 0;
-function check(string $label, mixed $expected, mixed $actual): void
-{
+function check(string $label, mixed $expected, mixed $actual): void {
     if ($expected !== $actual) {
         throw new RuntimeException($label . ': expected ' . var_export($expected, true) . ', got ' . var_export($actual, true));
     }
@@ -52,8 +51,7 @@ function check(string $label, mixed $expected, mixed $actual): void
     $GLOBALS['passed']++;
 }
 
-function discover(string $url, ?string $description = null): Item
-{
+function discover(string $url, ?string $description = null): Item {
     $item = Item::findOrCreateByURL(new URL($url), 'text/html', null, $description);
 
     if ($item === null) {
@@ -63,14 +61,12 @@ function discover(string $url, ?string $description = null): Item
     return $item;
 }
 
-function drain(): void
-{
+function drain(): void {
     while (SearchIndexQueue::processPending(1000, true) > 0) {
     }
 }
 
-function indexed_items(): array
-{
+function indexed_items(): array {
     return ItemSearchIndex::candidates('widgets', false, 1000);
 }
 

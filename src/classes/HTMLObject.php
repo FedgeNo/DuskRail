@@ -2,12 +2,10 @@
 
 declare(strict_types=1);
 
-class HTMLObject
-{
+class HTMLObject {
     protected static \DOMDocument $document;
 
-    public static function currentDocument(): \DOMDocument
-    {
+    public static function currentDocument(): \DOMDocument {
         return self::$document;
     }
 
@@ -19,8 +17,7 @@ class HTMLObject
     public array $contents = [];
     public array $attributes = [];
 
-    public function __construct()
-    {
+    public function __construct() {
         $declaring_class = (new \ReflectionProperty(static::class, 'class')) -> getDeclaringClass() -> getName();
 
         if ($declaring_class === self::class) {
@@ -43,13 +40,11 @@ class HTMLObject
         $this -> class = trim($base_value . ' ' . implode(' ', array_reverse($names)));
     }
 
-    public function addContent(HTMLObject|CData|string|\DOMNode $item): void
-    {
+    public function addContent(HTMLObject|CData|string|\DOMNode $item): void {
         $this -> contents[] = $item;
     }
 
-    public function toDOM(): \DOMElement
-    {
+    public function toDOM(): \DOMElement {
         $element = self::$document -> createElement($this -> tagName);
 
         if ($this -> id !== null) {
@@ -74,8 +69,7 @@ class HTMLObject
         return $element;
     }
 
-    protected function contentToNode($item): ?\DOMNode
-    {
+    protected function contentToNode($item): ?\DOMNode {
         if ($item instanceof HTMLObject) {
             return $item -> toDOM();
         } elseif ($item instanceof CData) {
@@ -92,8 +86,7 @@ class HTMLObject
     /**
      * Render a standalone object (not part of a full HTMLDocument) to an HTML string.
      */
-    public function render(): string
-    {
+    public function render(): string {
         $implementation = new \DOMImplementation();
         self::$document = $implementation -> createDocument();
         self::$document -> formatOutput = true;
@@ -106,8 +99,7 @@ class HTMLObject
         return self::stripSelfClosingSlash(self::$document -> saveXML($element));
     }
 
-    protected static function fillEmptyNonVoidTags(\DOMElement $root): void
-    {
+    protected static function fillEmptyNonVoidTags(\DOMElement $root): void {
         $xpath = new \DOMXPath(self::$document);
 
         foreach ($xpath -> query('//*[not(node())]', $root) as $element) {
@@ -126,8 +118,7 @@ class HTMLObject
      * saveXML entity-escapes any bare ">" inside text or attribute values -
      * so this replace can't corrupt real content.
      */
-    protected static function stripSelfClosingSlash(string $xml): string
-    {
+    protected static function stripSelfClosingSlash(string $xml): string {
         return str_replace('/>', '>', $xml);
     }
 }

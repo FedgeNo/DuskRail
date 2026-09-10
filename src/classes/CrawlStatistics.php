@@ -6,8 +6,7 @@ declare(strict_types=1);
  * The exact crawl catalogue counters maintained transactionally beside the
  * rows whose state they describe.
  */
-class CrawlStatistics
-{
+class CrawlStatistics {
     public int $found = 0;
     public int $indexed = 0;
     public int $searchable = 0;
@@ -17,8 +16,7 @@ class CrawlStatistics
     public int $hosts = 0;
     public int $dead = 0;
 
-    public function __construct()
-    {
+    public function __construct() {
         $result = mysqli_query(Database::connection(), '
 SELECT `found`, `indexed`, `searchable`, `queued`, `pages`, `images`, `hosts`, `dead`
     FROM `CrawlCounters`
@@ -31,8 +29,7 @@ SELECT `found`, `indexed`, `searchable`, `queued`, `pages`, `images`, `hosts`, `
         }
     }
 
-    private function hydrate(array $row): void
-    {
+    private function hydrate(array $row): void {
         $this -> found = (int) $row['found'];
         $this -> indexed = (int) $row['indexed'];
         $this -> searchable = (int) $row['searchable'];
@@ -43,8 +40,7 @@ SELECT `found`, `indexed`, `searchable`, `queued`, `pages`, `images`, `hosts`, `
         $this -> dead = (int) $row['dead'];
     }
 
-    public function toJSON(): array
-    {
+    public function toJSON(): array {
         return [
             'found' => $this -> found,
             'indexed' => $this -> indexed,

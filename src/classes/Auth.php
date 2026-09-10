@@ -14,8 +14,7 @@ declare(strict_types=1);
  * cookie alone would let any other site's page submit to them on behalf of
  * whoever's signed in here.
  */
-class Auth
-{
+class Auth {
     private const AUTHENTICATED_KEY = 'authenticated';
     private const CSRF_TOKEN_KEY = 'csrfToken';
 
@@ -25,8 +24,7 @@ class Auth
     private const CSRF_HEADER = 'HTTP_X_CSRF_TOKEN';
     private static ?bool $authenticationResult = null;
 
-    public static function isAuthenticated(): bool
-    {
+    public static function isAuthenticated(): bool {
         if (self::$authenticationResult !== null) {
             return self::$authenticationResult;
         }
@@ -64,8 +62,7 @@ class Auth
      * all - an install that never set one must not end up letting everyone
      * through, which is exactly what an empty-string comparison would do.
      */
-    public static function logIn(string $password): bool
-    {
+    public static function logIn(string $password): bool {
         $config = require ROOT_DIR . '/src/config.php';
 
         if ($config['authPasswordHash'] === '' || !password_verify($password, $config['authPasswordHash'])) {
@@ -87,8 +84,7 @@ class Auth
         return true;
     }
 
-    public static function logOut(): void
-    {
+    public static function logOut(): void {
         self::startSession();
 
         $_SESSION = [];
@@ -100,8 +96,7 @@ class Auth
      * For a page: sends an unauthenticated visitor to the login form and stops
      * there, rather than rendering a shell of the page they can't use.
      */
-    public static function requirePage(): void
-    {
+    public static function requirePage(): void {
         if (self::isAuthenticated()) {
             return;
         }
@@ -115,8 +110,7 @@ class Auth
      * the caller is fetch(), which would silently follow a redirect to the
      * login page and try to parse the HTML as JSON.
      */
-    public static function requireAPI(): void
-    {
+    public static function requireAPI(): void {
         if (self::isAuthenticated()) {
             return;
         }
@@ -130,8 +124,7 @@ class Auth
      * For a JSON endpoint that changes something: a valid session AND a CSRF
      * token matching this session's.
      */
-    public static function requireWriteAPI(): void
-    {
+    public static function requireWriteAPI(): void {
         self::requireAPI();
 
         if (!hash_equals(self::csrfToken(), (string) ($_SERVER[self::CSRF_HEADER] ?? ''))) {
@@ -142,8 +135,7 @@ class Auth
     }
 
     /** Require an authenticated, CSRF-protected ordinary form submission. */
-    public static function requireWritePage(): void
-    {
+    public static function requireWritePage(): void {
         self::requirePage();
 
         if (!hash_equals(self::csrfToken(), (string) ($_POST['_csrf'] ?? ''))) {
@@ -157,8 +149,7 @@ class Auth
      * This session's CSRF token, minted on first use and stable for the rest
      * of the session so a page rendered once keeps working.
      */
-    public static function csrfToken(): string
-    {
+    public static function csrfToken(): string {
         self::startSession();
 
         return $_SESSION[self::CSRF_TOKEN_KEY] ??= bin2hex(random_bytes(32));
@@ -171,8 +162,7 @@ class Auth
      * (samesite), and HTTPS-only whenever the request itself arrived over
      * HTTPS.
      */
-    private static function startSession(): bool
-    {
+    private static function startSession(): bool {
         if (session_status() === PHP_SESSION_ACTIVE) {
             return true;
         }
@@ -199,8 +189,7 @@ class Auth
     }
 
     /** Destroy server state and expire the browser cookie with matching scope. */
-    private static function discardSession(): void
-    {
+    private static function discardSession(): void {
         if (session_status() === PHP_SESSION_ACTIVE) {
             $_SESSION = [];
             session_destroy();

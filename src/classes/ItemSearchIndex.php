@@ -2,8 +2,7 @@
 
 declare(strict_types=1);
 
-final class ItemSearchIndex extends SearchIndex
-{
+final class ItemSearchIndex extends SearchIndex {
     public const TABLE = 'duskrail_items';
     public const MARIA_SEARCHABLE_CONDITION = '
 `crawledTime` IS NOT NULL
@@ -15,8 +14,7 @@ final class ItemSearchIndex extends SearchIndex
         OR COALESCE(`fullText`, \'\') <> \'\')';
 
     /** @param int[] $item_ids */
-    public static function syncIds(array $item_ids): void
-    {
+    public static function syncIds(array $item_ids): void {
         $item_ids = self::normalizedIds($item_ids);
 
         if ($item_ids === []) {
@@ -49,8 +47,7 @@ SELECT `itemId`, `type`, `title`, `description`, `fullText`, `inc`
     }
 
     /** @param array<int, array<string, mixed>> $rows */
-    public static function upsertRows(array $rows): void
-    {
+    public static function upsertRows(array $rows): void {
         foreach (array_chunk($rows, 100) as $chunk) {
             if ($chunk === []) {
                 continue;
@@ -79,8 +76,7 @@ SELECT `itemId`, `type`, `title`, `description`, `fullText`, `inc`
     }
 
     /** @param int[] $item_ids */
-    public static function syncCounts(array $item_ids): void
-    {
+    public static function syncCounts(array $item_ids): void {
         $item_ids = self::normalizedIds($item_ids);
 
         if ($item_ids === []) {
@@ -139,8 +135,7 @@ SELECT `itemId`, `inc`, `title`, `description`
     }
 
     /** @return array<int, array{itemId: int, inc: int, relevance: float}> */
-    public static function candidates(string $query, bool $images, int $limit): array
-    {
+    public static function candidates(string $query, bool $images, int $limit): array {
         $match = self::matchExpression($query);
 
         if ($match === '') {
@@ -171,14 +166,12 @@ SELECT `itemId`, `inc`, `title`, `description`
         return $candidates;
     }
 
-    public static function clear(): void
-    {
+    public static function clear(): void {
         self::run('TRUNCATE TABLE ' . self::TABLE);
     }
 
     /** @param int[] $ids */
-    private static function normalizedIds(array $ids): array
-    {
+    private static function normalizedIds(array $ids): array {
         $ids = array_values(array_unique(array_filter(array_map('intval', $ids), static fn (int $id): bool => $id > 0)));
         sort($ids, SORT_NUMERIC);
 

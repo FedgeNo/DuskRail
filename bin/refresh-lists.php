@@ -38,8 +38,7 @@ require __DIR__ . '/../init.php';
  * warning: everything keeps working on last week's copy, which for lists
  * that change this slowly is no practical difference.
  */
-function report(string $name, bool $refreshed, bool $cached, ?int $ageSeconds): bool
-{
+function report(string $name, bool $refreshed, bool $cached, ?int $ageSeconds): bool {
     if ($refreshed) {
         echo '[ ok ] ' . $name . ' refreshed.
 ';

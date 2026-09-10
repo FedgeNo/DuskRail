@@ -11,8 +11,7 @@ declare(strict_types=1);
  * rendered here, and all of it read out of the database and thrown away on
  * every click if this used Item::findById().
  */
-class ItemPreview
-{
+class ItemPreview {
     public ?int $itemId = null;
     public ?string $url = null;
     public ?string $type = null;
@@ -25,8 +24,7 @@ class ItemPreview
      * hasn't been crawled - an uncrawled row is a queue entry, not something
      * with content to show.
      */
-    public static function findById(int $itemId): ?self
-    {
+    public static function findById(int $itemId): ?self {
         // noindex items are excluded here for the same reason search excludes
         // them: the page opted out of being served, and "only reachable by
         // guessing itemIds" isn't excluded.
@@ -58,8 +56,7 @@ SELECT `itemId`, `url`, `type`, `title`, `description`
         return $preview;
     }
 
-    public function toJSON(): array
-    {
+    public function toJSON(): array {
         return [
             'itemId' => $this -> itemId,
             'url' => $this -> url,

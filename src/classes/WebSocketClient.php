@@ -10,8 +10,7 @@ declare(strict_types=1);
  * client-to-server frames masked per spec, server-to-client assumed
  * unmasked (real per spec, but tolerated either way).
  */
-class WebSocketClient
-{
+class WebSocketClient {
     private const GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
 
     // How long one frame may spend waiting for the socket's send buffer to
@@ -37,8 +36,7 @@ class WebSocketClient
     /** @var resource */
     private $socket;
 
-    public function __construct(string $url, float $timeoutSeconds)
-    {
+    public function __construct(string $url, float $timeoutSeconds) {
         $parts = parse_url($url);
 
         if ($parts === false || !isset($parts['host'], $parts['port'])) {
@@ -101,8 +99,7 @@ class WebSocketClient
         }
     }
 
-    public function close(): void
-    {
+    public function close(): void {
         if (is_resource($this -> socket)) {
             fclose($this -> socket);
         }
@@ -113,8 +110,7 @@ class WebSocketClient
      * class ever sends fits in a single frame, so fragmentation on the way
      * out is never needed.
      */
-    public function sendText(string $payload): void
-    {
+    public function sendText(string $payload): void {
         $length = strlen($payload);
         $frame = chr(0x81); // FIN + text opcode
 
@@ -144,8 +140,7 @@ class WebSocketClient
      * with a pong and otherwise ignored; a close frame ends the read as if
      * the deadline had passed, since there's nothing more to receive.
      */
-    public function receiveMessage(float $deadline): ?string
-    {
+    public function receiveMessage(float $deadline): ?string {
         $message = '';
 
         while (true) {
@@ -182,8 +177,7 @@ class WebSocketClient
         }
     }
 
-    private function sendPong(string $payload): void
-    {
+    private function sendPong(string $payload): void {
         $length = strlen($payload);
         $mask = random_bytes(4);
         $frame = chr(0x8A) . chr($length | 0x80) . $mask;
@@ -202,8 +196,7 @@ class WebSocketClient
      * tail: the peer reads the next frame's header out of the middle of it,
      * and the connection is desynchronized from then on.
      */
-    private function writeAll(string $payload): void
-    {
+    private function writeAll(string $payload): void {
         $deadline = microtime(true) + self::WRITE_TIMEOUT_SECONDS;
 
         while ($payload !== '') {
@@ -238,8 +231,7 @@ class WebSocketClient
     /**
      * @return array{fin: bool, opcode: int, payload: string}|null
      */
-    private function readFrame(float $deadline): ?array
-    {
+    private function readFrame(float $deadline): ?array {
         $header = $this -> readExactly(2, $deadline);
 
         if ($header === null) {
@@ -313,8 +305,7 @@ class WebSocketClient
      */
     private string $buffer = '';
 
-    private function readExactly(int $byteCount, float $deadline): ?string
-    {
+    private function readExactly(int $byteCount, float $deadline): ?string {
         while (strlen($this -> buffer) < $byteCount) {
             $remaining = $deadline - microtime(true);
 

@@ -21,8 +21,7 @@ declare(strict_types=1);
  * Refreshed by bin/refresh-lists.php on a weekly timer, never on demand from
  * a crawl - see that script for why the schedule lives outside the crawler.
  */
-class TLDs
-{
+class TLDs {
     private const SOURCE_URL = 'https://data.iana.org/TLD/tlds-alpha-by-domain.txt';
     private const CACHE_FILE = ROOT_DIR . '/data/tlds.txt';
 
@@ -32,8 +31,7 @@ class TLDs
      * Whether $tld (already lowercased by the caller - URL's own host is
      * lowercased at construction) is a real, currently delegated TLD.
      */
-    public static function isValid(string $tld): bool
-    {
+    public static function isValid(string $tld): bool {
         return isset(self::loaded()[$tld]);
     }
 
@@ -42,8 +40,7 @@ class TLDs
      * bin/refresh-lists.php on its weekly timer, and by bin/install.php so a
      * freshly cloned install has a working list before the first crawl.
      */
-    public static function refresh(): bool
-    {
+    public static function refresh(): bool {
         $connection = new HTTPConnection(new URL(self::SOURCE_URL));
 
         if ($connection -> statusCode !== 200) {
@@ -81,23 +78,19 @@ class TLDs
         return true;
     }
 
-    public static function isCached(): bool
-    {
+    public static function isCached(): bool {
         return is_file(self::CACHE_FILE);
     }
 
-    public static function cacheAgeSeconds(): ?int
-    {
+    public static function cacheAgeSeconds(): ?int {
         return self::isCached() ? time() - (int) filemtime(self::CACHE_FILE) : null;
     }
 
-    private static function loaded(): array
-    {
+    private static function loaded(): array {
         return self::$tlds ??= self::readCache();
     }
 
-    private static function readCache(): array
-    {
+    private static function readCache(): array {
         if (!is_file(self::CACHE_FILE)) {
             // Loud rather than empty: an empty set answers false for every
             // TLD there is, so every URL fails validation and the crawler

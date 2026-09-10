@@ -3,15 +3,13 @@
 declare(strict_types=1);
 
 /** Parses a byte count written as bytes or with a decimal G/T suffix. */
-final class ByteSize
-{
+final class ByteSize {
     private const MULTIPLIERS = [
         'G' => 1_000_000_000,
         'T' => 1_000_000_000_000,
     ];
 
-    public static function bytes(string $value): int
-    {
+    public static function bytes(string $value): int {
         $value = trim($value);
 
         if (ctype_digit($value)) {

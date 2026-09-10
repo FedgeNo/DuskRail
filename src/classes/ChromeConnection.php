@@ -25,8 +25,7 @@ declare(strict_types=1);
  * prevent any subresource requests, without needing to separately intercept
  * and block them one by one.
  */
-class ChromeConnection
-{
+class ChromeConnection {
     private const NAVIGATION_TIMEOUT_SECONDS = 15.0;
     private const HANDSHAKE_TIMEOUT_SECONDS = 3.0;
 
@@ -53,8 +52,7 @@ class ChromeConnection
      * referrer - it sets the actual Referer header and lets Chrome derive
      * Sec-Fetch-Site itself, rather than this class guessing either.
      */
-    public function __construct(string $hostAndPort, URL $url, ?URL $referrer = null)
-    {
+    public function __construct(string $hostAndPort, URL $url, ?URL $referrer = null) {
         $tab = new ChromeTab($hostAndPort, self::HANDSHAKE_TIMEOUT_SECONDS);
 
         try {
@@ -68,8 +66,7 @@ class ChromeConnection
      * The parsed Content-Type header (e.g. "text/html; charset=UTF-8"), or
      * null if the response didn't send one.
      */
-    public function contentType(): ?ContentType
-    {
+    public function contentType(): ?ContentType {
         return isset($this -> headers['content-type']) ? new ContentType($this -> headers['content-type']) : null;
     }
 
@@ -80,13 +77,11 @@ class ChromeConnection
      * option the way curl's pause/resume gave HTTPConnection) - this just
      * hands it back.
      */
-    public function readBody(): string
-    {
+    public function readBody(): string {
         return $this -> body;
     }
 
-    private function fetch(ChromeTab $tab, URL $url, ?URL $referrer): void
-    {
+    private function fetch(ChromeTab $tab, URL $url, ?URL $referrer): void {
         $tab -> sendCommand('Network.setUserAgentOverride', [
             'userAgent' => self::USER_AGENT,
             'platform' => 'Win32',
@@ -169,8 +164,7 @@ class ChromeConnection
         }
     }
 
-    private function handleRequestPaused(ChromeTab $tab, array $params, ?int &$bodyRequestId, ?string &$pendingRequestId): bool
-    {
+    private function handleRequestPaused(ChromeTab $tab, array $params, ?int &$bodyRequestId, ?string &$pendingRequestId): bool {
         // Both are documented as present at the Response stage but are
         // optional in the protocol, and a request paused with a network-level
         // error carries neither. Read defensively: statusCode staying null is
@@ -208,8 +202,7 @@ class ChromeConnection
         return true;
     }
 
-    private function handleResponseBody(ChromeTab $tab, array $message, string $pendingRequestId): void
-    {
+    private function handleResponseBody(ChromeTab $tab, array $message, string $pendingRequestId): void {
         if (isset($message['result'])) {
             $raw = $message['result']['base64Encoded']
                 ? base64_decode($message['result']['body'])

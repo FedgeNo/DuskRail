@@ -26,8 +26,7 @@ declare(strict_types=1);
  * up to twice the limit through in one window's worth of time; the limits
  * here are set with that in mind rather than pretending it away.
  */
-class RateLimit
-{
+class RateLimit {
     private const WINDOW_SECONDS = 60;
 
     // One browser. Far above what a person clicking search results can
@@ -69,8 +68,7 @@ class RateLimit
      * either is exceeded. Called at the top of every public endpoint, before
      * any query the caller was hoping to make.
      */
-    public static function enforcePublicAPI(): void
-    {
+    public static function enforcePublicAPI(): void {
         self::enforce('', self::ADDRESS_LIMIT, self::CLIENT_LIMIT);
     }
 
@@ -88,8 +86,7 @@ class RateLimit
      * ThumbnailCache's per-client concurrency cap already bounds how many
      * outbound fetches can be in flight.
      */
-    public static function enforceThumbnailAPI(): void
-    {
+    public static function enforceThumbnailAPI(): void {
         self::enforce('thumb-', self::THUMBNAIL_ADDRESS_LIMIT, self::THUMBNAIL_CLIENT_LIMIT);
     }
 
@@ -98,8 +95,7 @@ class RateLimit
      * above. $bucketPrefix scopes the counters so two endpoints don't share a
      * budget; it must keep the resulting bucket names within RateLimits.bucket.
      */
-    private static function enforce(string $bucketPrefix, int $addressLimit, int $clientLimit): void
-    {
+    private static function enforce(string $bucketPrefix, int $addressLimit, int $clientLimit): void {
         $retryAfter = self::exceededBy($bucketPrefix, $addressLimit, $clientLimit);
 
         if ($retryAfter === null) {
@@ -119,8 +115,7 @@ class RateLimit
      * emitting JSON - login.php is a form page, not an API, and a 429 JSON
      * body would just be text in a browser tab.
      */
-    public static function loginRetryAfter(): ?int
-    {
+    public static function loginRetryAfter(): ?int {
         $windowStart = intdiv(time(), self::WINDOW_SECONDS) * self::WINDOW_SECONDS;
 
         if (self::countRequest('login', self::address(), $windowStart) <= self::LOGIN_LIMIT) {
@@ -136,8 +131,7 @@ class RateLimit
      * in place by the time that page starts calling the JSON endpoints -
      * otherwise every load before the cookie lands looks like a new client.
      */
-    public static function issueClientToken(): void
-    {
+    public static function issueClientToken(): void {
         self::clientToken();
     }
 
@@ -147,8 +141,7 @@ class RateLimit
      * one has already tripped - a caller that keeps hammering a closed door
      * shouldn't have its other budget quietly recovering while it does.
      */
-    private static function exceededBy(string $bucketPrefix, int $addressLimit, int $clientLimit): ?int
-    {
+    private static function exceededBy(string $bucketPrefix, int $addressLimit, int $clientLimit): ?int {
         $windowStart = intdiv(time(), self::WINDOW_SECONDS) * self::WINDOW_SECONDS;
 
         $addressCount = self::countRequest($bucketPrefix . 'address', self::address(), $windowStart);
@@ -172,8 +165,7 @@ class RateLimit
      * one round trip, and no window where a concurrent request could read a
      * count between another's increment and its own.
      */
-    private static function countRequest(string $bucket, string $identifier, int $windowStart): int
-    {
+    private static function countRequest(string $bucket, string $identifier, int $windowStart): int {
         $connection = Database::connection();
 
         $insert = mysqli_prepare($connection, '
@@ -195,8 +187,7 @@ INSERT INTO `RateLimits` (`bucket`, `identifier`, `windowStart`, `requests`)
      * needs the proxy to set REMOTE_ADDR (mod_remoteip and equivalents do
      * exactly this) rather than this code to start believing a header.
      */
-    private static function address(): string
-    {
+    private static function address(): string {
         return (string) ($_SERVER['REMOTE_ADDR'] ?? 'unknown');
     }
 
@@ -206,8 +197,7 @@ INSERT INTO `RateLimits` (`bucket`, `identifier`, `windowStart`, `requests`)
      * server-side state for every visitor, to hold one value that means
      * nothing on its own and grants nothing.
      */
-    private static function clientToken(): string
-    {
+    private static function clientToken(): string {
         $existing = (string) ($_COOKIE[self::CLIENT_COOKIE] ?? '');
 
         // Only accept the shape this issues - 32 hex characters. A cookie is
@@ -231,8 +221,7 @@ INSERT INTO `RateLimits` (`bucket`, `identifier`, `windowStart`, `requests`)
         return $token;
     }
 
-    private static function cleanUpOccasionally(int $windowStart): void
-    {
+    private static function cleanUpOccasionally(int $windowStart): void {
         if (random_int(1, self::CLEANUP_PROBABILITY) !== 1) {
             return;
         }

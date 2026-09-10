@@ -2,8 +2,7 @@
 
 declare(strict_types=1);
 
-class Host
-{
+class Host {
     // Normal politeness delay between requests to the same host.
     private const DEFAULT_DELAY_SECONDS = 60;
 
@@ -115,8 +114,7 @@ class Host
     // processed.
     private ?array $robotsRules = null;
 
-    public static function fromRow(array $row): self
-    {
+    public static function fromRow(array $row): self {
         $host = new self();
 
         $host -> hostId = (int) $row['hostId'];
@@ -144,8 +142,7 @@ class Host
      * blank defaults - fetchRobotsTxtIfStale() would otherwise refetch
      * robots.txt on every single call.
      */
-    public static function findOrCreateByName(string $name): self
-    {
+    public static function findOrCreateByName(string $name): self {
         $connection = Database::connection();
 
         // domain is written on the duplicate branch too, so a row created
@@ -185,8 +182,7 @@ SELECT *
      * @param array<string, int> $counts
      * @return array<string, self>
      */
-    public static function findOrCreateManyByName(array $counts): array
-    {
+    public static function findOrCreateManyByName(array $counts): array {
         if ($counts === []) {
             return [];
         }
@@ -246,8 +242,7 @@ SELECT *
      * soon. Called once per actual request, regardless of what the response
      * turned out to be.
      */
-    public function recordCrawl(bool $wasRateLimited): void
-    {
+    public function recordCrawl(bool $wasRateLimited): void {
         $connection = Database::connection();
         $now = time();
         $nextCrawlTime = $now + max($wasRateLimited ? self::RATE_LIMITED_DELAY_SECONDS : self::DEFAULT_DELAY_SECONDS, $this -> honoredCrawlDelay());
@@ -274,8 +269,7 @@ UPDATE `Hosts`
      * in line, so the item itself is left alone for a retry once the backoff
      * passes rather than deleted over what may be a passing outage.
      */
-    public function recordFailure(): void
-    {
+    public function recordFailure(): void {
         $connection = Database::connection();
         $now = time();
 
@@ -300,8 +294,7 @@ UPDATE `Hosts`
      * Crawl-delay when one was declared (capped - see
      * MAX_CRAWL_DELAY_SECONDS), the default otherwise.
      */
-    private function honoredCrawlDelay(): int
-    {
+    private function honoredCrawlDelay(): int {
         if ($this -> crawlDelaySeconds === null) {
             return self::DEFAULT_DELAY_SECONDS;
         }
@@ -322,8 +315,7 @@ UPDATE `Hosts`
      * different items on one host would sail straight past the cooldown that
      * exists precisely to stop that.
      */
-    public function reserve(): bool
-    {
+    public function reserve(): bool {
         if (!self::reserveById($this -> hostId)) {
             return false;
         }
@@ -341,8 +333,7 @@ UPDATE `Hosts`
      * same Crawl-delay cap honoredCrawlDelay() applies), so the reservation
      * stays one atomic statement.
      */
-    public static function reserveById(int $hostId): bool
-    {
+    public static function reserveById(int $hostId): bool {
         $connection = Database::connection();
         $defaultDelay = self::DEFAULT_DELAY_SECONDS;
         $maxDelay = self::MAX_CRAWL_DELAY_SECONDS;
@@ -367,8 +358,7 @@ UPDATE `Hosts`
      * happened and came back readable - the moment sitemap ingestion (see
      * Sitemap) is worth running, since the Sitemap: lines just arrived.
      */
-    public function fetchRobotsTxtIfStale(string $scheme, string $chromeEndpoint): bool
-    {
+    public function fetchRobotsTxtIfStale(string $scheme, string $chromeEndpoint): bool {
         if (!$this -> isRobotsTxtStale()) {
             return false;
         }
@@ -481,8 +471,7 @@ UPDATE `Hosts`
      * cap at use time, so a site raising or lowering its wish is always read
      * back from what it actually said.
      */
-    private static function crawlDelayFor(string $robotsTxt): ?int
-    {
+    private static function crawlDelayFor(string $robotsTxt): ?int {
         $currentUserAgents = [];
         $seenDirectiveSinceLastUserAgent = false;
 
@@ -527,21 +516,18 @@ UPDATE `Hosts`
      * say so via countNewPendingItem(), so the limit still holds within a
      * single page's worth of discovered links.
      */
-    public function hasPendingCapacity(): bool
-    {
+    public function hasPendingCapacity(): bool {
         self::$pendingItemCounts[$this -> hostId] ??= $this -> pendingItemCount();
 
         return self::$pendingItemCounts[$this -> hostId] < self::MAX_PENDING_ITEMS;
     }
 
-    public function countNewPendingItem(): void
-    {
+    public function countNewPendingItem(): void {
         self::$pendingItemCounts[$this -> hostId] ??= $this -> pendingItemCount();
         self::$pendingItemCounts[$this -> hostId]++;
     }
 
-    private function pendingItemCount(): int
-    {
+    private function pendingItemCount(): int {
         $select = mysqli_prepare(Database::connection(), '
 SELECT COUNT(*) AS `pendingItems`
     FROM `Items`
@@ -561,8 +547,7 @@ SELECT COUNT(*) AS `pendingItems`
      * go ahead", and must leave the item alone for a later retry rather than
      * deleting it (nothing is wrong with the item; we just can't ask).
      */
-    public function isRobotsTxtKnown(): bool
-    {
+    public function isRobotsTxtKnown(): bool {
         return $this -> robotsTxtFetched === 1;
     }
 
@@ -578,8 +563,7 @@ SELECT COUNT(*) AS `pendingItems`
      * wrong with the string. See IPAddress for what counts as an address
      * worth refusing, and for how a name that resolves to nothing is read.
      */
-    public function isPubliclyRoutable(): bool
-    {
+    public function isPubliclyRoutable(): bool {
         return IPAddress::hostResolvesPublicly($this -> host);
     }
 
@@ -589,8 +573,7 @@ SELECT COUNT(*) AS `pendingItems`
      * equivalents deliberately, since the limit is a byte budget (the
      * column's and the spec's alike), not a character count.
      */
-    private static function capRobotsTxt(string $robotsTxt): string
-    {
+    private static function capRobotsTxt(string $robotsTxt): string {
         if (strlen($robotsTxt) <= self::MAX_ROBOTS_TXT_BYTES) {
             return $robotsTxt;
         }
@@ -601,8 +584,7 @@ SELECT COUNT(*) AS `pendingItems`
         return $lastNewline !== false ? substr($capped, 0, $lastNewline) : '';
     }
 
-    private function isRobotsTxtStale(): bool
-    {
+    private function isRobotsTxtStale(): bool {
         if ($this -> robotsTxtFetchedTime === null) {
             return true;
         }
@@ -613,8 +595,7 @@ SELECT COUNT(*) AS `pendingItems`
     }
 
     /** Same-host-only robots redirect policy, exposed for regression tests. */
-    public function allowsRobotsRedirect(URL $target): bool
-    {
+    public function allowsRobotsRedirect(URL $target): bool {
         return $target -> isValid() && $target -> host === $this -> host;
     }
 
@@ -641,8 +622,7 @@ SELECT COUNT(*) AS `pendingItems`
      * "allowed" on a host that may well have said otherwise is the one
      * mistake that can't be taken back once the request has gone out.
      */
-    public function isDisallowed(string $path): bool
-    {
+    public function isDisallowed(string $path): bool {
         if (!$this -> isRobotsTxtKnown()) {
             return true;
         }
@@ -699,8 +679,7 @@ SELECT COUNT(*) AS `pendingItems`
      *
      * @return list<array{type: 'allow'|'disallow', pattern: string, regex: string}>
      */
-    private static function rulesForWildcardUserAgent(string $robotsTxt): array
-    {
+    private static function rulesForWildcardUserAgent(string $robotsTxt): array {
         $rules = [];
         $currentUserAgents = [];
         // True once *any* real directive (Allow, Disallow, Sitemap,
@@ -776,8 +755,7 @@ SELECT COUNT(*) AS `pendingItems`
      * safe direction for a Disallow, and it removes the alternation that
      * makes a hand-crafted rule cost seconds of backtracking per path tested.
      */
-    private static function patternToRegex(string $pattern): string
-    {
+    private static function patternToRegex(string $pattern): string {
         $anchored = str_ends_with($pattern, '$');
         $body = $anchored ? substr($pattern, 0, -1) : $pattern;
 

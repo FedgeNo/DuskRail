@@ -17,8 +17,7 @@ declare(strict_types=1);
  * fast cURL GET is all that's needed. Still sent with a real-Chrome-shaped
  * header set rather than a bare User-Agent.
  */
-class HTTPConnection
-{
+class HTTPConnection {
     // Deliberately generous - a page can be extremely markup-heavy (nested
     // divs, inline SVGs, huge inlined scripts before removeStyleAndScriptTags()
     // strips them) and still only contain a perfectly reasonable amount of
@@ -44,8 +43,7 @@ class HTTPConnection
     private string $body = '';
     private bool $bodyRead = false;
 
-    public function __construct(URL $url, int $timeout_seconds = 15)
-    {
+    public function __construct(URL $url, int $timeout_seconds = 15) {
         if ($timeout_seconds < 1) {
             throw new \InvalidArgumentException('An HTTP timeout must be positive.');
         }
@@ -155,8 +153,7 @@ class HTTPConnection
      * The parsed Content-Type header (e.g. "text/html; charset=UTF-8"), or
      * null if the response didn't send one.
      */
-    public function contentType(): ?ContentType
-    {
+    public function contentType(): ?ContentType {
         return isset($this -> headers['content-type']) ? new ContentType($this -> headers['content-type']) : null;
     }
 
@@ -166,8 +163,7 @@ class HTTPConnection
      * the body's worth reading at all, there's no reason left to keep this
      * one open/pausable.
      */
-    public function readBody(): string
-    {
+    public function readBody(): string {
         if ($this -> bodyRead) {
             return $this -> body;
         }
@@ -197,8 +193,7 @@ class HTTPConnection
      * ever need (robots.txt, the IANA TLD list - never an image or anything
      * fetched as a "subresource" in the first place).
      */
-    private static function chromeHeaders(): array
-    {
+    private static function chromeHeaders(): array {
         return [
             'sec-ch-ua: "Chromium";v="' . self::CHROME_VERSION . '", "Not:A-Brand";v="24", '
                 . '"Google Chrome";v="' . self::CHROME_VERSION . '"',
@@ -216,8 +211,7 @@ class HTTPConnection
         ];
     }
 
-    private function onHeaderLine(\CurlHandle $ch, string $line): int
-    {
+    private function onHeaderLine(\CurlHandle $ch, string $line): int {
         $trimmed = rtrim($line, "\r\n");
 
         if ($trimmed === '') {
@@ -248,8 +242,7 @@ class HTTPConnection
         return strlen($line);
     }
 
-    private function pullUntilHeadersComplete(): void
-    {
+    private function pullUntilHeadersComplete(): void {
         do {
             $status = curl_multi_exec($this -> multiHandle, $active);
 

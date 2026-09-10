@@ -2,8 +2,7 @@
 
 declare(strict_types=1);
 
-class URL
-{
+class URL {
     private const DEFAULT_PORTS = ['http' => 80, 'https' => 443];
 
     // The lengths DNS itself imposes on a name and on any one of its labels
@@ -57,8 +56,7 @@ class URL
     private bool $pathGiven;
     private bool $queryGiven;
 
-    public function __construct(string $url)
-    {
+    public function __construct(string $url) {
         // A crawled page's markup is hostile input - parse_url() returns
         // false outright for a sufficiently malformed string (a stray ":" in
         // the wrong place, a garbage port, ...) rather than a partial parse.
@@ -140,8 +138,7 @@ class URL
      * internal-only suffixes ("http://app.corp/", "http://db.local/") -
      * without needing a separate, dedicated IP-literal check at all.
      */
-    public function isValid(): bool
-    {
+    public function isValid(): bool {
         if (!in_array($this -> scheme, ['http', 'https'], true) || $this -> host === '' || !self::isHostnameShapedLikeOne($this -> host)) {
             return false;
         }
@@ -163,8 +160,7 @@ class URL
      * hostname (which any page can print) is a "Data too long" exception that
      * takes the whole worker down mid-crawl, on every retry, forever.
      */
-    private static function isHostnameShapedLikeOne(string $host): bool
-    {
+    private static function isHostnameShapedLikeOne(string $host): bool {
         if (mb_strlen($host) > self::MAX_HOST_LENGTH) {
             return false;
         }
@@ -190,15 +186,13 @@ class URL
      * per request, so the "same" login link looks like a new, never-seen
      * URL every single time a page links to it.
      */
-    public function isLikelyOAuthURL(): bool
-    {
+    public function isLikelyOAuthURL(): bool {
         return isset($this -> queryParameters['client_id'])
             && isset($this -> queryParameters['redirect_uri'])
             && isset($this -> queryParameters['response_type']);
     }
 
-    public function toString(): string
-    {
+    public function toString(): string {
         $url = $this -> scheme . '://' . $this -> host;
 
         // The port property itself always holds a real number, but the
@@ -224,8 +218,7 @@ class URL
      * or "Disallow: /search?q=" is about the query, and matching the bare
      * path would silently ignore every rule of that shape.
      */
-    public function pathAndQuery(): string
-    {
+    public function pathAndQuery(): string {
         return $this -> queryParameters === [] ? $this -> path : $this -> path . '?' . $this -> queryString();
     }
 
@@ -237,8 +230,7 @@ class URL
      * keeps this URL's host but replaces the whole path; and a bare relative
      * one ("path", "../path", "?q=1") is merged against this URL's own path.
      */
-    public function resolve(self $relative): self
-    {
+    public function resolve(self $relative): self {
         $result = (new \ReflectionClass(self::class)) -> newInstanceWithoutConstructor();
 
         if ($relative -> scheme !== '') {
@@ -299,8 +291,7 @@ class URL
      * the first alternative only matches a "%" that ISN'T followed by two
      * hex digits, i.e. one that's actually raw, not part of an existing escape.
      */
-    private static function encodePath(string $path): string
-    {
+    private static function encodePath(string $path): string {
         return preg_replace_callback(
             '/%(?![0-9A-Fa-f]{2})|[^A-Za-z0-9\-._~!$&\'()*+,;=:@\/%]/',
             static fn (array $match): string => rawurlencode($match[0]),
@@ -323,8 +314,7 @@ class URL
      * still read as one key for isset() (isLikelyOAuthURL()) and unset()
      * (TRACKING_PARAMETERS) purposes.
      */
-    private static function parseQuery(string $query): array
-    {
+    private static function parseQuery(string $query): array {
         $parameters = [];
 
         foreach (explode('&', $query) as $pair) {
@@ -362,8 +352,7 @@ class URL
      * otherwise (urlencode, so a space is "+"), since that's the form every
      * URL already in the index was normalized to.
      */
-    private function queryString(): string
-    {
+    private function queryString(): string {
         $pairs = [];
 
         foreach ($this -> queryParameters as $name => $value) {
@@ -375,8 +364,7 @@ class URL
         return implode('&', $pairs);
     }
 
-    private static function isImagePath(string $path): bool
-    {
+    private static function isImagePath(string $path): bool {
         return in_array(strtolower(pathinfo($path, PATHINFO_EXTENSION)), self::IMAGE_EXTENSIONS, true);
     }
 
@@ -385,8 +373,7 @@ class URL
      * base's directory (everything up to its last '/'), not its full path -
      * "b" resolved against "/a/x" is "/a/b", not "/a/xb".
      */
-    private static function mergePaths(string $basePath, string $referencePath): string
-    {
+    private static function mergePaths(string $basePath, string $referencePath): string {
         $lastSlash = strrpos($basePath, '/');
 
         return $lastSlash === false ? $referencePath : substr($basePath, 0, $lastSlash + 1) . $referencePath;
@@ -398,8 +385,7 @@ class URL
      * URL, so links found on a page normalize to the same canonical form
      * regardless of how many "../" a particular link happened to use.
      */
-    private static function removeDotSegments(string $path): string
-    {
+    private static function removeDotSegments(string $path): string {
         $output = '';
 
         while ($path !== '') {

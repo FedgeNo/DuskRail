@@ -111,8 +111,7 @@ while (is_resource($server)) {
 fclose($server);
 
 /** @param resource $client */
-function proxy_handle_client($client): void
-{
+function proxy_handle_client($client): void {
     proxy_debug('client accepted');
     stream_set_timeout($client, PROXY_HANDSHAKE_TIMEOUT_SECONDS);
     $header = proxy_read_exact($client, 2);
@@ -235,8 +234,7 @@ function proxy_handle_client($client): void
 }
 
 /** @param resource $stream */
-function proxy_read_exact($stream, int $length): ?string
-{
+function proxy_read_exact($stream, int $length): ?string {
     $data = '';
 
     while (strlen($data) < $length) {
@@ -253,8 +251,7 @@ function proxy_read_exact($stream, int $length): ?string
 }
 
 /** @param resource $stream */
-function proxy_write_all($stream, string $data): bool
-{
+function proxy_write_all($stream, string $data): bool {
     while ($data !== '') {
         $written = fwrite($stream, $data);
 
@@ -269,13 +266,11 @@ function proxy_write_all($stream, string $data): bool
 }
 
 /** @param resource $client */
-function proxy_reply($client, int $status): void
-{
+function proxy_reply($client, int $status): void {
     fwrite($client, "\x05" . chr($status) . "\x00\x01\x00\x00\x00\x00\x00\x00");
 }
 
-function proxy_debug(string $message): void
-{
+function proxy_debug(string $message): void {
     if (getenv('DUSKRAIL_PROXY_DEBUG') === '1') {
         fwrite(STDERR, '[outbound-proxy] ' . $message . "\n");
     }

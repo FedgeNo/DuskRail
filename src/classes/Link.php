@@ -2,8 +2,7 @@
 
 declare(strict_types=1);
 
-class Link
-{
+class Link {
     // Matches schema.sql's Links.description column, for the same reason Item
     // carries its own limits: link text is a parent node's whole textContent
     // and routinely runs past this. INSERT IGNORE below quietly downgrades
@@ -28,8 +27,7 @@ class Link
      * inflate its own inbound-link signal in search ranking and focused-crawl
      * priority the way a real link from another page shouldn't.
      */
-    public static function create(int $parentId, int $childId, ?string $description): void
-    {
+    public static function create(int $parentId, int $childId, ?string $description): void {
         if ($parentId === $childId) {
             return;
         }
@@ -60,8 +58,7 @@ INSERT IGNORE INTO `Links` (`parentId`, `childId`, `description`)
      *
      * @return list<int>
      */
-    public static function createMany(int $parentId, array $links): array
-    {
+    public static function createMany(int $parentId, array $links): array {
         unset($links[$parentId]);
 
         if ($links === []) {
@@ -104,8 +101,7 @@ INSERT IGNORE INTO `Links` (`parentId`, `childId`, `description`)
      * @param list<int> $childIds
      * @return list<int>
      */
-    private static function existingChildIds(int $parentId, array $childIds): array
-    {
+    private static function existingChildIds(int $parentId, array $childIds): array {
         $connection = Database::connection();
         $existing = [];
 
@@ -139,8 +135,7 @@ SELECT `childId`
      * takes whichever the `childId_parentId` index hands back first rather
      * than picking by recency/count.
      */
-    public static function findParentURL(int $childId): ?string
-    {
+    public static function findParentURL(int $childId): ?string {
         $select = mysqli_prepare(Database::connection(), '
 SELECT `Items`.`url`
     FROM `Links`

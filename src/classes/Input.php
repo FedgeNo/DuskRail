@@ -2,8 +2,7 @@
 
 declare(strict_types=1);
 
-class Input extends HTMLVoidElement
-{
+class Input extends HTMLVoidElement {
     public string $tagName = 'input';
     public ?string $type = null;
     public ?string $name = null;
@@ -13,8 +12,7 @@ class Input extends HTMLVoidElement
     public bool $checked = false;
     public bool $autofocus = false;
 
-    public function toDOM(): \DOMElement
-    {
+    public function toDOM(): \DOMElement {
         if ($this -> type !== null) {
             $this -> attributes['type'] = $this -> type;
         }

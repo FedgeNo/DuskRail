@@ -21,54 +21,45 @@ if (PHP_SAPI !== 'cli') {
 // runs with, not a lookalike that drifts from them.
 require __DIR__ . '/../init.php';
 
-function supports_color(): bool
-{
+function supports_color(): bool {
     return function_exists('stream_isatty') && stream_isatty(STDOUT);
 }
 
-function color(string $text, string $code): string
-{
+function color(string $text, string $code): string {
     return supports_color() ? chr(27) . '[' . $code . 'm' . $text . chr(27) . '[0m' : $text;
 }
 
-function ok(string $message): void
-{
+function ok(string $message): void {
     echo color('[ OK ]', '32') . ' ' . $message . '
 ';
 }
 
-function warn(string $message): void
-{
+function warn(string $message): void {
     echo color('[WARN]', '33') . ' ' . $message . '
 ';
 }
 
-function fail_line(string $message): void
-{
+function fail_line(string $message): void {
     echo color('[FAIL]', '31') . ' ' . $message . '
 ';
 }
 
-function fail(string $message): never
-{
+function fail(string $message): never {
     fail_line($message);
     exit(1);
 }
 
-function heading(string $text): void
-{
+function heading(string $text): void {
     echo '
 ' . color($text, '1') . '
 ';
 }
 
-function is_interactive(): bool
-{
+function is_interactive(): bool {
     return function_exists('stream_isatty') && stream_isatty(STDIN);
 }
 
-function prompt(string $question, string $default): string
-{
+function prompt(string $question, string $default): string {
     if (!is_interactive()) {
         return $default;
     }
@@ -86,8 +77,7 @@ function prompt(string $question, string $default): string
  * a terminal left with echo off is a genuinely unpleasant thing to hand back
  * to someone.
  */
-function prompt_secret(string $question): string
-{
+function prompt_secret(string $question): string {
     if (!is_interactive()) {
         return '';
     }
@@ -103,8 +93,7 @@ function prompt_secret(string $question): string
 }
 
 /** A non-echoed or generated application DB password for a fresh .env. */
-function prompt_database_password(): string
-{
+function prompt_database_password(): string {
     $supplied = (string) getenv('DUSKRAIL_DB_PASSWORD');
 
     if ($supplied !== '') {
@@ -127,8 +116,7 @@ function prompt_database_password(): string
 }
 
 /** The password for DuskRail's pre-provisioned Manticore application user. */
-function prompt_manticore_password(): string
-{
+function prompt_manticore_password(): string {
     $supplied = (string) getenv('DUSKRAIL_MANTICORE_PASSWORD');
 
     if ($supplied !== '') {
@@ -159,8 +147,7 @@ function prompt_manticore_password(): string
  * which of the two won would come down to which Env::load() happened to read
  * last.
  */
-function set_env_line(string $path, string $key, string $value): void
-{
+function set_env_line(string $path, string $key, string $value): void {
     $lines = file($path, FILE_IGNORE_NEW_LINES);
 
     if ($lines === false) {
@@ -194,8 +181,7 @@ function set_env_line(string $path, string $key, string $value): void
  * statement at all. This is the defense-in-depth substitute: refuse
  * anything that isn't a plain identifier before it ever reaches SQL.
  */
-function validate_identifier(string $value, string $label): string
-{
+function validate_identifier(string $value, string $label): string {
     if (preg_match('/^[A-Za-z0-9_]{1,64}$/', $value) !== 1) {
         fail($label . ' "' . $value . '" may only contain letters, numbers, and underscores (max 64 chars).');
     }
@@ -360,8 +346,7 @@ if (Env::get('AUTH_PASSWORD_HASH', '') === '') {
  * typo would otherwise lock the installer out of its own site) and returns
  * its hash.
  */
-function prompt_password_hash(): string
-{
+function prompt_password_hash(): string {
     if (!is_interactive()) {
         return '';
     }
@@ -499,8 +484,7 @@ mysqli_report(MYSQLI_REPORT_ERROR | MYSQLI_REPORT_STRICT);
 // mysqli_real_escape_string() is the only option for this specific
 // statement shape.
 
-function table_exists(string $table): bool
-{
+function table_exists(string $table): bool {
     $connection = Database::connection();
 
     $result = mysqli_query($connection, '
@@ -511,8 +495,7 @@ SHOW TABLES
     return $result !== false && mysqli_num_rows($result) > 0;
 }
 
-function column_exists(string $table, string $column): bool
-{
+function column_exists(string $table, string $column): bool {
     // FROM `table` is a backtick-quoted identifier, not a value - it can't be
     // a placeholder either way, so it's validated instead (this function is
     // only ever called with the table names literally written in
@@ -537,8 +520,7 @@ SHOW COLUMNS
  * than add one, where its mere existence says nothing about whether the
  * delta has been applied.
  */
-function column_type(string $table, string $column): string
-{
+function column_type(string $table, string $column): string {
     $select = mysqli_prepare(Database::connection(), '
 SELECT `COLUMN_TYPE`
     FROM `information_schema`.`COLUMNS`
@@ -559,8 +541,7 @@ SELECT `COLUMN_TYPE`
  * information_schema (not a SHOW ... LIKE), so it can be a normal prepared
  * statement with placeholders like everywhere else.
  */
-function index_exists(string $table, string $indexName): bool
-{
+function index_exists(string $table, string $indexName): bool {
     $select = mysqli_prepare(Database::connection(), '
 SELECT 1
     FROM `information_schema`.`STATISTICS`
@@ -576,8 +557,7 @@ SELECT 1
     return $result !== false && mysqli_num_rows($result) > 0;
 }
 
-function trigger_exists(string $triggerName): bool
-{
+function trigger_exists(string $triggerName): bool {
     $select = mysqli_prepare(Database::connection(), '
 SELECT 1
     FROM `information_schema`.`TRIGGERS`
@@ -592,23 +572,20 @@ SELECT 1
     return $result !== false && mysqli_num_rows($result) > 0;
 }
 
-function run_sql(string $sql): void
-{
+function run_sql(string $sql): void {
     if (!mysqli_query(Database::connection(), $sql)) {
         fail('Schema delta failed: ' . mysqli_error(Database::connection()) . '
 ' . $sql);
     }
 }
 
-function search_index_backfill_complete(): bool
-{
+function search_index_backfill_complete(): bool {
     $state = json_decode((string) Setting::value('searchIndexBackfill'), true);
 
     return is_array($state) && ($state['phase'] ?? '') === 'complete';
 }
 
-function run_search_index_backfill(): void
-{
+function run_search_index_backfill(): void {
     $process = proc_open(
         [PHP_BINARY, ROOT_DIR . '/bin/rebuild-search-index.php'],
         [STDIN, STDOUT, STDERR],
@@ -626,8 +603,7 @@ function run_search_index_backfill(): void
 }
 
 /** @param string[] $index_names */
-function drop_indexes(string $table, array $index_names): void
-{
+function drop_indexes(string $table, array $index_names): void {
     $table = validate_identifier($table, 'table name');
     $clauses = [];
 
@@ -646,8 +622,7 @@ ALTER TABLE `' . $table . '`
 ');
 }
 
-function schema_deltas(): array
-{
+function schema_deltas(): array {
     return [
         [
             'name' => 'create_items_and_links_tables',
@@ -1520,8 +1495,7 @@ ok($filled === 0 ? 'Every host already has its domain' : 'Filled in ' . $filled 
  * since guessing wrong produces setup commands that fail on half the distros
  * this could be installed on.
  */
-function web_server_user(): string
-{
+function web_server_user(): string {
     $running = trim((string) shell_exec('ps -eo user,comm 2>/dev/null | grep -E \'httpd|apache2|nginx\' | grep -v root | head -1 | cut -d\' \' -f1'));
 
     if ($running !== '') {

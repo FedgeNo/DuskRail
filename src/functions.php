@@ -16,8 +16,7 @@ declare(strict_types=1);
 /**
  * The account name owning $path, or null if it can't be determined.
  */
-function file_owner_name(string $path): ?string
-{
+function file_owner_name(string $path): ?string {
     $ownerId = @fileowner($path);
 
     if ($ownerId === false) {
@@ -38,8 +37,7 @@ function file_owner_name(string $path): ?string
 /**
  * Whether a local account by this name exists.
  */
-function user_exists(string $name): bool
-{
+function user_exists(string $name): bool {
     if (function_exists('posix_getpwnam')) {
         return posix_getpwnam($name) !== false;
     }
@@ -52,8 +50,7 @@ function user_exists(string $name): bool
  * error message, so an id is a perfectly good answer when there's no way to
  * turn it into a name.
  */
-function current_user_name(): string
-{
+function current_user_name(): string {
     if (function_exists('posix_geteuid')) {
         $userId = posix_geteuid();
 
@@ -78,8 +75,7 @@ function current_user_name(): string
  * has already established the process is unreachable - a browser left behind
  * by a manager that died without shutting it down.
  */
-function kill_process(int $pid): void
-{
+function kill_process(int $pid): void {
     if (function_exists('posix_kill')) {
         posix_kill($pid, SIGKILL);
 

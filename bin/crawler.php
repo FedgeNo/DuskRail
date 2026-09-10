@@ -37,8 +37,7 @@ const PDF_EXTRACT_STALE_SECONDS = 3600;
  * treated as an ordinary (non-rate-limited) attempt for cooldown purposes,
  * same as any other single failed request.
  */
-function recordHostCrawl(Host $host, ?int $statusCode): void
-{
+function recordHostCrawl(Host $host, ?int $statusCode): void {
     $host -> recordCrawl($statusCode !== null && in_array($statusCode, RATE_LIMITED_STATUS_CODES, true));
 }
 
@@ -56,8 +55,7 @@ function recordHostCrawl(Host $host, ?int $statusCode): void
  * itself a request to the host - by the time there's a verdict to check, the
  * request the check exists to prevent has already gone out.
  */
-function hostFor(URL $url, string $chromeEndpoint): ?Host
-{
+function hostFor(URL $url, string $chromeEndpoint): ?Host {
     $host = Host::findOrCreateByName($url -> host);
 
     if (!$host -> isPubliclyRoutable()) {
@@ -82,8 +80,7 @@ function hostFor(URL $url, string $chromeEndpoint): ?Host
  * type, which is exactly why it exists (a PDF or image has no <meta> to
  * carry noindex in).
  */
-function header_robots_directives(?string $header): array
-{
+function header_robots_directives(?string $header): array {
     $tokens = array_map('trim', explode(',', strtolower((string) $header)));
     $none = in_array('none', $tokens, true);
 
@@ -93,8 +90,7 @@ function header_robots_directives(?string $header): array
     ];
 }
 
-function pdftotext_available(): bool
-{
+function pdftotext_available(): bool {
     static $available = null;
 
     return $available ??= trim((string) shell_exec('command -v pdftotext 2>/dev/null')) !== '';
@@ -105,8 +101,7 @@ function pdftotext_available(): bool
  * normalized. Empty string when there's nothing extractable - a scanned
  * document, an encrypted file, something pdftotext can't parse.
  */
-function pdf_to_text(string $pdf): string
-{
+function pdf_to_text(string $pdf): string {
     $path = VAR_DIR . '/pdf-extract-' . getmypid() . '.pdf';
     file_put_contents($path, $pdf);
 
@@ -131,8 +126,7 @@ function pdf_to_text(string $pdf): string
  * they're only ever reclaimed by chance otherwise - and a site serving PDFs
  * that reliably hang the extractor gets to leave one behind per attempt.
  */
-function sweep_stale_pdf_extracts(): void
-{
+function sweep_stale_pdf_extracts(): void {
     foreach (glob(VAR_DIR . '/pdf-extract-*.pdf') ?: [] as $path) {
         if (is_file($path) && time() - (int) filemtime($path) > PDF_EXTRACT_STALE_SECONDS) {
             @unlink($path);
@@ -146,8 +140,7 @@ function sweep_stale_pdf_extracts(): void
  * whose rules can't be read isn't the same as one whose rules say no, and
  * neither is the same as a host that's simply still on cooldown.
  */
-function crawlPermission(Host $host, URL $url): string
-{
+function crawlPermission(Host $host, URL $url): string {
     if (!$host -> isRobotsTxtKnown()) {
         return 'robots-unknown';
     }

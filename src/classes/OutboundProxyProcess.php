@@ -8,8 +8,7 @@ declare(strict_types=1);
  * socket is opened to one exact approved address. Chromium still sees the
  * original hostname, so TLS SNI and certificate verification remain intact.
  */
-class OutboundProxyProcess
-{
+class OutboundProxyProcess {
     private const START_TIMEOUT_SECONDS = 5.0;
 
     /** @var resource */
@@ -18,8 +17,7 @@ class OutboundProxyProcess
 
     public readonly string $hostAndPort;
 
-    public function __construct()
-    {
+    public function __construct() {
         $command = [PHP_BINARY, ROOT_DIR . '/bin/outbound-proxy.php', (string) getmypid()];
         $descriptors = [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']];
         $process = proc_open($command, $descriptors, $pipes);
@@ -63,13 +61,11 @@ class OutboundProxyProcess
         $this -> hostAndPort = $endpoint;
     }
 
-    public function isHealthy(): bool
-    {
+    public function isHealthy(): bool {
         return proc_get_status($this -> process)['running'];
     }
 
-    public function drainOutput(): void
-    {
+    public function drainOutput(): void {
         // stdout contains only the already-consumed startup endpoint. stderr
         // is diagnostic and must still be drained so a noisy failure cannot
         // fill the pipe and block the proxy parent.
@@ -81,8 +77,7 @@ class OutboundProxyProcess
         }
     }
 
-    public function shutdown(): void
-    {
+    public function shutdown(): void {
         if (!isset($this -> process)) {
             return;
         }
@@ -101,8 +96,7 @@ class OutboundProxyProcess
         unset($this -> process);
     }
 
-    public function __destruct()
-    {
+    public function __destruct() {
         $this -> shutdown();
     }
 }

@@ -6,8 +6,7 @@ declare(strict_types=1);
  * Host::isDisallowed() against hand-built rule sets - the Host is
  * constructed bare (no database), which is all the matcher needs.
  */
-function robots_test_host(string $robotsTxt): Host
-{
+function robots_test_host(string $robotsTxt): Host {
     $host = new Host();
     $host -> robotsTxt = $robotsTxt;
     $host -> robotsTxtFetched = 1;

@@ -2,14 +2,12 @@
 
 declare(strict_types=1);
 
-class Database
-{
+class Database {
     private const TRANSACTION_ATTEMPTS = 3;
 
     private static ?\mysqli $connection = null;
 
-    public static function connection(): \mysqli
-    {
+    public static function connection(): \mysqli {
         if (self::$connection === null) {
             $config = require ROOT_DIR . '/src/config.php';
 
@@ -32,8 +30,7 @@ class Database
      * administrator identity supplied for that invocation, never through the
      * permanently configured least-privilege runtime account.
      */
-    public static function useConnection(\mysqli $connection): void
-    {
+    public static function useConnection(\mysqli $connection): void {
         if (self::$connection !== null && self::$connection !== $connection) {
             mysqli_close(self::$connection);
         }
@@ -42,8 +39,7 @@ class Database
         mysqli_set_charset(self::$connection, 'utf8mb4');
     }
 
-    public static function transaction(callable $work): mixed
-    {
+    public static function transaction(callable $work): mixed {
         $connection = self::connection();
 
         for ($attempt = 1; $attempt <= self::TRANSACTION_ATTEMPTS; $attempt++) {

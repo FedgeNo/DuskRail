@@ -12,8 +12,7 @@ declare(strict_types=1);
  * MAX_AGE_SECONDS) - a crashed or stale browser is this class's problem to
  * report via isHealthy(), not something callers work around themselves.
  */
-class ChromeProcess
-{
+class ChromeProcess {
     // Chromium first, Chrome only as a fallback: Chromium is the same engine
     // without the proprietary additions, and every one of those additions is
     // something this crawler would want switched off anyway.
@@ -100,8 +99,7 @@ class ChromeProcess
 
     public readonly string $hostAndPort;
 
-    public function __construct(string $proxyHostAndPort)
-    {
+    public function __construct(string $proxyHostAndPort) {
         $binary = self::findBinary();
 
         if ($binary === null) {
@@ -152,8 +150,7 @@ class ChromeProcess
         $this -> hostAndPort = $match[1];
     }
 
-    public function ageSeconds(): float
-    {
+    public function ageSeconds(): float {
         return microtime(true) - $this -> startedAt;
     }
 
@@ -171,8 +168,7 @@ class ChromeProcess
      * because a dead Chrome held it an hour ago would be far worse than
      * leaving a stray process alone.
      */
-    public static function sweepAbandoned(): int
-    {
+    public static function sweepAbandoned(): int {
         $swept = 0;
 
         foreach (glob(sys_get_temp_dir() . '/' . self::USER_DATA_DIR_PREFIX . '*') ?: [] as $directory) {
@@ -194,8 +190,7 @@ class ChromeProcess
         return $swept;
     }
 
-    private static function isStillThisBrowser(int $pid, string $userDataDir): bool
-    {
+    private static function isStillThisBrowser(int $pid, string $userDataDir): bool {
         $commandLine = @file_get_contents('/proc/' . $pid . '/cmdline');
 
         return is_string($commandLine) && str_contains($commandLine, '--user-data-dir=' . $userDataDir);
@@ -211,8 +206,7 @@ class ChromeProcess
      * for every generation it's still holding, so the pipes never get near
      * that point.
      */
-    public function drainOutput(): void
-    {
+    public function drainOutput(): void {
         foreach ($this -> pipes as $pipe) {
             if (is_resource($pipe)) {
                 stream_get_contents($pipe);
@@ -226,8 +220,7 @@ class ChromeProcess
      * (unresponsive but not crashed) would pass a bare proc_get_status()
      * check while every fetch through it hangs.
      */
-    public function isHealthy(): bool
-    {
+    public function isHealthy(): bool {
         if (!proc_get_status($this -> process)['running']) {
             return false;
         }
@@ -244,8 +237,7 @@ class ChromeProcess
         return is_string($response) && $response !== '';
     }
 
-    public function shutdown(): void
-    {
+    public function shutdown(): void {
         if (isset($this -> process) && is_resource($this -> process)) {
             $this -> killProcessTree();
 
@@ -263,8 +255,7 @@ class ChromeProcess
         }
     }
 
-    private function waitForDevtoolsURL(): ?string
-    {
+    private function waitForDevtoolsURL(): ?string {
         $deadline = microtime(true) + self::LAUNCH_TIMEOUT_SECONDS;
         $buffer = '';
 
@@ -285,8 +276,7 @@ class ChromeProcess
         return null;
     }
 
-    private static function findBinary(): ?string
-    {
+    private static function findBinary(): ?string {
         $config = require ROOT_DIR . '/src/config.php';
 
         if ($config['chromeBinary'] !== '') {
@@ -304,8 +294,7 @@ class ChromeProcess
         return null;
     }
 
-    private function killProcessTree(): void
-    {
+    private function killProcessTree(): void {
         if (!proc_get_status($this -> process)['running']) {
             return;
         }
@@ -323,8 +312,7 @@ class ChromeProcess
         proc_terminate($this -> process, SIGKILL);
     }
 
-    private static function removeDirectory(string $path): void
-    {
+    private static function removeDirectory(string $path): void {
         $entries = @scandir($path);
 
         if ($entries === false) {

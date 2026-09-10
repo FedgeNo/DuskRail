@@ -2,7 +2,6 @@
 
 declare(strict_types=1);
 
-class Div extends HTMLObject
-{
+class Div extends HTMLObject {
     public string $tagName = 'div';
 }

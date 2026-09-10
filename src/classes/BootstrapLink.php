@@ -8,10 +8,8 @@ declare(strict_types=1);
  * come from here, and so pages keep working with no third party up or
  * reachable.
  */
-class BootstrapLink extends LinkTag
-{
-    public function __construct()
-    {
+class BootstrapLink extends LinkTag {
+    public function __construct() {
         parent::__construct();
 
         $this -> rel = 'stylesheet';

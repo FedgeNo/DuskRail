@@ -11,15 +11,13 @@ declare(strict_types=1);
  * CrawlStatistics reads the transactionally maintained catalogue counters
  * shared with the admin view, so the two summaries cannot drift.
  */
-class IndexStats extends HTMLObject
-{
+class IndexStats extends HTMLObject {
     public ?string $class = 'IndexStats mt-3';
 
     public int $pages = 0;
     public int $images = 0;
 
-    public function __construct()
-    {
+    public function __construct() {
         parent::__construct();
 
         $statistics = new CrawlStatistics();
@@ -27,8 +25,7 @@ class IndexStats extends HTMLObject
         $this -> images = $statistics -> images;
     }
 
-    public function toDOM(): \DOMElement
-    {
+    public function toDOM(): \DOMElement {
         $this -> addContent('Searching ' . number_format($this -> pages) . ' pages and ' . number_format($this -> images) . ' images.');
 
         return parent::toDOM();

@@ -3,8 +3,7 @@
 declare(strict_types=1);
 
 /** The dense live crawl and server summary at the top of the watch page. */
-class CrawlStatisticsTable extends HTMLObject
-{
+class CrawlStatisticsTable extends HTMLObject {
     public string $tagName = 'table';
     public ?string $class = 'CrawlStatisticsTable';
 
@@ -27,8 +26,7 @@ class CrawlStatisticsTable extends HTMLObject
         ],
     ];
 
-    public function toDOM(): \DOMElement
-    {
+    public function toDOM(): \DOMElement {
         $table = parent::toDOM();
         $table -> setAttribute('aria-label', 'Live crawl and server statistics');
         $body = self::currentDocument() -> createElement('tbody');

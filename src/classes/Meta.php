@@ -2,15 +2,13 @@
 
 declare(strict_types=1);
 
-class Meta extends HTMLVoidElement
-{
+class Meta extends HTMLVoidElement {
     public string $tagName = 'meta';
     public ?string $charset = null;
     public ?string $name = null;
     public ?string $content = null;
 
-    public function toDOM(): \DOMElement
-    {
+    public function toDOM(): \DOMElement {
         if ($this -> charset !== null) {
             $this -> attributes['charset'] = $this -> charset;
         }

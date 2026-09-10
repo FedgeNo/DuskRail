@@ -19,8 +19,7 @@ declare(strict_types=1);
  * host can't queue more than a fraction of that anyway, so reading past the
  * cap would be pure waste.
  */
-class Sitemap
-{
+class Sitemap {
     private const MAX_FETCHES = 3;
     private const MAX_URLS = 500;
 
@@ -35,8 +34,7 @@ class Sitemap
      * Reads the sitemaps $robotsTxt declares and queues what they list.
      * Returns how many URLs were newly queued.
      */
-    public static function ingestFor(Host $host, string $robotsTxt): int
-    {
+    public static function ingestFor(Host $host, string $robotsTxt): int {
         $queued = 0;
         $fetches = 0;
         $pending = self::declaredSitemapURLs($robotsTxt, $host);
@@ -128,8 +126,7 @@ class Sitemap
      *
      * @return list<URL>
      */
-    private static function declaredSitemapURLs(string $robotsTxt, Host $host): array
-    {
+    private static function declaredSitemapURLs(string $robotsTxt, Host $host): array {
         $urls = [];
 
         foreach (preg_split('/\r\n|\r|\n/', $robotsTxt) as $line) {
@@ -149,8 +146,7 @@ class Sitemap
         return $urls;
     }
 
-    private static function isSitemapIndex(string $body): bool
-    {
+    private static function isSitemapIndex(string $body): bool {
         return stripos($body, '<sitemapindex') !== false;
     }
 
@@ -163,8 +159,7 @@ class Sitemap
      *
      * @return list<string>
      */
-    private static function locations(string $body): array
-    {
+    private static function locations(string $body): array {
         $locations = [];
         $cursor = 0;
 

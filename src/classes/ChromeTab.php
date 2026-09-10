@@ -19,8 +19,7 @@ declare(strict_types=1);
  * disposeBrowserContext() in close() tears down everything created within it
  * (this tab included) in one step.
  */
-class ChromeTab
-{
+class ChromeTab {
     private const HTTP_TIMEOUT_SECONDS = 3;
     private const CONTEXT_TIMEOUT_SECONDS = 3.0;
 
@@ -30,8 +29,7 @@ class ChromeTab
     private WebSocketClient $ws;
     private int $nextCommandId = 1;
 
-    public function __construct(string $hostAndPort, float $handshakeTimeoutSeconds)
-    {
+    public function __construct(string $hostAndPort, float $handshakeTimeoutSeconds) {
         $browserWsURL = self::browserWebSocketURL($hostAndPort);
 
         if ($browserWsURL === null) {
@@ -68,8 +66,7 @@ class ChromeTab
      * affects the top level, so nested array values still encode as real
      * JSON arrays.
      */
-    public function sendCommand(string $method, array $params = []): int
-    {
+    public function sendCommand(string $method, array $params = []): int {
         $id = $this -> nextCommandId++;
         $this -> ws -> sendText(json_encode(['id' => $id, 'method' => $method, 'params' => (object) $params]));
 
@@ -80,8 +77,7 @@ class ChromeTab
      * One decoded CDP message (an event, or a command's response), or null
      * if $deadline passes or the tab's connection closes first.
      */
-    public function receiveMessage(float $deadline): ?array
-    {
+    public function receiveMessage(float $deadline): ?array {
         $raw = $this -> ws -> receiveMessage($deadline);
 
         if ($raw === null) {
@@ -98,8 +94,7 @@ class ChromeTab
      * returns true (this is the response/event the caller was waiting for)
      * or $deadline passes (returns null either way).
      */
-    public function waitUntil(callable $onMessage, float $deadline): ?array
-    {
+    public function waitUntil(callable $onMessage, float $deadline): ?array {
         while (true) {
             $message = $this -> receiveMessage($deadline);
 
@@ -113,15 +108,13 @@ class ChromeTab
         }
     }
 
-    public function close(): void
-    {
+    public function close(): void {
         $this -> ws -> close();
         $this -> disposeBrowserContext();
         $this -> browserWs -> close();
     }
 
-    private function createBrowserContext(): string
-    {
+    private function createBrowserContext(): string {
         $id = $this -> sendBrowserCommand('Target.createBrowserContext');
         $response = $this -> waitForBrowserResponse($id, microtime(true) + self::CONTEXT_TIMEOUT_SECONDS);
         $contextId = $response['result']['browserContextId'] ?? null;
@@ -145,8 +138,7 @@ class ChromeTab
         return $contextId;
     }
 
-    private function createTarget(string $browserContextId): string
-    {
+    private function createTarget(string $browserContextId): string {
         $id = $this -> sendBrowserCommand('Target.createTarget', [
             'url' => 'about:blank',
             'browserContextId' => $browserContextId,
@@ -161,22 +153,19 @@ class ChromeTab
         return $targetId;
     }
 
-    private function disposeBrowserContext(): void
-    {
+    private function disposeBrowserContext(): void {
         $id = $this -> sendBrowserCommand('Target.disposeBrowserContext', ['browserContextId' => $this -> browserContextId]);
         $this -> waitForBrowserResponse($id, microtime(true) + self::CONTEXT_TIMEOUT_SECONDS);
     }
 
-    private function sendBrowserCommand(string $method, array $params = []): int
-    {
+    private function sendBrowserCommand(string $method, array $params = []): int {
         $id = $this -> nextBrowserCommandId++;
         $this -> browserWs -> sendText(json_encode(['id' => $id, 'method' => $method, 'params' => (object) $params]));
 
         return $id;
     }
 
-    private function waitForBrowserResponse(int $id, float $deadline): ?array
-    {
+    private function waitForBrowserResponse(int $id, float $deadline): ?array {
         while (true) {
             $raw = $this -> browserWs -> receiveMessage($deadline);
 
@@ -198,8 +187,7 @@ class ChromeTab
      * that browser lives - so paying an HTTP round trip for it on every
      * single tab was one avoidable request per fetch.
      */
-    private static function browserWebSocketURL(string $hostAndPort): ?string
-    {
+    private static function browserWebSocketURL(string $hostAndPort): ?string {
         static $cache = [];
 
         if (isset($cache[$hostAndPort])) {

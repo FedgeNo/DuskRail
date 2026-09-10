@@ -2,13 +2,11 @@
 
 declare(strict_types=1);
 
-class Label extends HTMLObject
-{
+class Label extends HTMLObject {
     public string $tagName = 'label';
     public ?string $for = null;
 
-    public function toDOM(): \DOMElement
-    {
+    public function toDOM(): \DOMElement {
         if ($this -> for !== null) {
             $this -> attributes['for'] = $this -> for;
         }

@@ -2,22 +2,19 @@
 
 declare(strict_types=1);
 
-final class LinkSearchIndex extends SearchIndex
-{
+final class LinkSearchIndex extends SearchIndex {
     public const TABLE = 'duskrail_links';
     private const CACHE_SETTING = 'focusedCrawlCandidates';
     private static bool $mutating = false;
 
     /** @param int[] $item_ids */
-    public static function syncItemIds(array $item_ids, array $outgoing_ids = []): void
-    {
+    public static function syncItemIds(array $item_ids, array $outgoing_ids = []): void {
         if ($item_ids !== [] || $outgoing_ids !== []) {
             self::mutate(static fn () => self::syncLinks($item_ids, $outgoing_ids));
         }
     }
 
-    private static function syncLinks(array $item_ids, array $outgoing_ids): void
-    {
+    private static function syncLinks(array $item_ids, array $outgoing_ids): void {
         $item_ids = array_values(array_unique(array_filter(array_map('intval', $item_ids), static fn (int $id): bool => $id > 0)));
         $parent_ids = array_values(array_unique(array_filter(array_map('intval', array_merge($item_ids, $outgoing_ids)), static fn (int $id): bool => $id > 0)));
         if ($parent_ids === []) {
@@ -76,8 +73,7 @@ INSERT INTO `LinkIndexRevisions` (`itemId`, `domainRevision`)
     }
 
     /** Read each indexed adjacency list in bounded primary/secondary-key pages. */
-    private static function syncEdges(array $item_ids, bool $incoming, array $rebuilt_parent_ids): void
-    {
+    private static function syncEdges(array $item_ids, bool $incoming, array $rebuilt_parent_ids): void {
         $fixed = $incoming ? 'childId' : 'parentId';
         $cursor_column = $incoming ? 'parentId' : 'childId';
         $index = $incoming ? 'childId_parentId' : 'PRIMARY';
@@ -114,8 +110,7 @@ SELECT STRAIGHT_JOIN `Links`.`parentId`, `Links`.`childId`, `Links`.`description
     }
 
     /** @param array<int, array<string, mixed>> $rows */
-    public static function upsertRows(array $rows): void
-    {
+    public static function upsertRows(array $rows): void {
         if ($rows !== []) {
             $direct = !self::$mutating;
             self::mutate(static function () use ($rows, $direct): void {
@@ -130,8 +125,7 @@ SELECT STRAIGHT_JOIN `Links`.`parentId`, `Links`.`childId`, `Links`.`description
         }
     }
 
-    private static function writeRows(array $rows): void
-    {
+    private static function writeRows(array $rows): void {
         foreach (array_chunk($rows, 200) as $chunk) {
             if ($chunk === []) {
                 continue;
@@ -162,8 +156,7 @@ SELECT STRAIGHT_JOIN `Links`.`parentId`, `Links`.`childId`, `Links`.`description
     }
 
     /** @param int[] $item_ids @return array<int, int> */
-    public static function matches(string $query, array $item_ids): array
-    {
+    public static function matches(string $query, array $item_ids): array {
         $match = self::matchExpression($query);
 
         if ($match === '' || $item_ids === []) {
@@ -189,8 +182,7 @@ SELECT STRAIGHT_JOIN `Links`.`parentId`, `Links`.`childId`, `Links`.`description
     }
 
     /** @return array<int, float> */
-    public static function focusedCandidates(string $query, int $limit): array
-    {
+    public static function focusedCandidates(string $query, int $limit): array {
         $limit = max(1, min(10000, $limit));
 
         // A writer in flight leaves readers on the original uncached path.
@@ -233,8 +225,7 @@ SELECT STRAIGHT_JOIN `Links`.`parentId`, `Links`.`childId`, `Links`.`description
         }
     }
 
-    private static function rankedCandidates(string $query, int $limit): array
-    {
+    private static function rankedCandidates(string $query, int $limit): array {
         $match = self::matchExpression($query);
 
         if ($match === '') {
@@ -258,16 +249,14 @@ SELECT STRAIGHT_JOIN `Links`.`parentId`, `Links`.`childId`, `Links`.`description
         return $candidates;
     }
 
-    public static function clear(): void
-    {
+    public static function clear(): void {
         self::mutate(static function (): void {
             self::advanceDomainRevision();
             self::run('TRUNCATE TABLE ' . self::TABLE);
         });
     }
 
-    private static function advanceDomainRevision(): void
-    {
+    private static function advanceDomainRevision(): void {
         mysqli_query(Database::connection(), '
 UPDATE `Settings`
     SET `value` = CAST(`value` AS UNSIGNED) + 1
@@ -278,8 +267,7 @@ UPDATE `Settings`
         }
     }
 
-    private static function mutate(callable $write): void
-    {
+    private static function mutate(callable $write): void {
         if (self::$mutating) {
             $write();
             return;
@@ -301,8 +289,7 @@ UPDATE `Settings`
         }
     }
 
-    private static function acquireCacheLock(int $timeout): bool
-    {
+    private static function acquireCacheLock(int $timeout): bool {
         $select = mysqli_prepare(Database::connection(), 'SELECT GET_LOCK(CONCAT(\'duskrail-link-index:\', DATABASE()), ?)');
         mysqli_stmt_bind_param($select, 'i', $timeout);
         mysqli_stmt_execute($select);
@@ -310,13 +297,11 @@ UPDATE `Settings`
         return (int) mysqli_fetch_row(mysqli_stmt_get_result($select))[0] === 1;
     }
 
-    private static function releaseCacheLock(): void
-    {
+    private static function releaseCacheLock(): void {
         mysqli_query(Database::connection(), 'SELECT RELEASE_LOCK(CONCAT(\'duskrail-link-index:\', DATABASE()))');
     }
 
-    private static function documentId(int $parent_id, int $child_id): int
-    {
+    private static function documentId(int $parent_id, int $child_id): int {
         if ($parent_id > 2147483647) {
             throw new \OverflowException('A link parent id cannot be packed into a signed 64-bit Manticore document id.');
         }

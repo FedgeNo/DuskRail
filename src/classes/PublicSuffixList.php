@@ -23,8 +23,7 @@ declare(strict_types=1);
  * against here - collapsing a platform's users into one linker costs a real
  * signal occasionally, and the alternative hands the attack straight back.
  */
-class PublicSuffixList
-{
+class PublicSuffixList {
     private const SOURCE_URL = 'https://publicsuffix.org/list/public_suffix_list.dat';
     private const CACHE_FILE = ROOT_DIR . '/data/public-suffix-list.dat';
 
@@ -48,8 +47,7 @@ class PublicSuffixList
      * available about who owns it, and never a suffix that would lump
      * unrelated sites together.
      */
-    public static function registrableDomain(string $host): string
-    {
+    public static function registrableDomain(string $host): string {
         $host = strtolower(trim($host, '.'));
 
         if ($host === '') {
@@ -71,8 +69,7 @@ class PublicSuffixList
      *
      * @param list<string> $labels
      */
-    private static function suffixLabelCount(array $labels): int
-    {
+    private static function suffixLabelCount(array $labels): int {
         $rules = self::loaded();
         $longestMatch = 0;
 
@@ -109,8 +106,7 @@ class PublicSuffixList
         return max(1, min($longestMatch, count($labels)));
     }
 
-    private static function loaded(): array
-    {
+    private static function loaded(): array {
         return self::$rules ??= self::readCache();
     }
 
@@ -121,8 +117,7 @@ class PublicSuffixList
      * which is what keeps a scheduled maintenance job the only thing that
      * ever waits on publicsuffix.org.
      */
-    public static function refresh(): bool
-    {
+    public static function refresh(): bool {
         $connection = new HTTPConnection(new URL(self::SOURCE_URL));
 
         if ($connection -> statusCode !== 200) {
@@ -159,21 +154,18 @@ class PublicSuffixList
         return true;
     }
 
-    public static function isCached(): bool
-    {
+    public static function isCached(): bool {
         return is_file(self::CACHE_FILE);
     }
 
-    public static function cacheAgeSeconds(): ?int
-    {
+    public static function cacheAgeSeconds(): ?int {
         return self::isCached() ? time() - (int) filemtime(self::CACHE_FILE) : null;
     }
 
     /**
      * @return array<string, string>
      */
-    private static function readCache(): array
-    {
+    private static function readCache(): array {
         if (!is_file(self::CACHE_FILE)) {
             // Loud rather than empty: with no list, every host would answer
             // as its own registrable domain and the link signal would go back

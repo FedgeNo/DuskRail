@@ -6,8 +6,7 @@ declare(strict_types=1);
  * One row of the live crawl feed (CrawlFeed) - what a crawler worker just
  * finished, as watch.php draws it.
  */
-class CrawlFeedItem
-{
+class CrawlFeedItem {
     // Longer than a search result's, since this is one row at a time rather
     // than a page of fifty competing for attention.
     private const DESCRIPTION_LENGTH = 300;
@@ -19,8 +18,7 @@ class CrawlFeedItem
     public ?string $description = null;
     public ?int $crawledTime = null;
 
-    public static function fromRow(array $row): self
-    {
+    public static function fromRow(array $row): self {
         $item = new self();
 
         $item -> itemId = (int) $row['itemId'];
@@ -33,8 +31,7 @@ class CrawlFeedItem
         return $item;
     }
 
-    public function toJSON(): array
-    {
+    public function toJSON(): array {
         return [
             'itemId' => $this -> itemId,
             'url' => $this -> url,

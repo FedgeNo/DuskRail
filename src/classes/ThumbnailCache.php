@@ -3,8 +3,7 @@
 declare(strict_types=1);
 
 /** Fetches and stores a missing thumbnail from the image Item's recorded URL. */
-final class ThumbnailCache
-{
+final class ThumbnailCache {
     public const ON_DEMAND_TIMEOUT_SECONDS = 8;
     public const MAXIMUM_USED_RATIO = 0.95;
 
@@ -16,8 +15,7 @@ final class ThumbnailCache
 
     private static ?bool $writeCapacity = null;
 
-    public static function useWriteCapacity(?bool $available): void
-    {
+    public static function useWriteCapacity(?bool $available): void {
         self::$writeCapacity = $available;
     }
 
@@ -25,8 +23,7 @@ final class ThumbnailCache
         float $free_bytes,
         float $total_bytes,
         ?int $minimum_free_bytes = null
-    ): bool
-    {
+    ): bool {
         if ($free_bytes < 0 || $total_bytes <= 0 || $free_bytes > $total_bytes) {
             return false;
         }
@@ -39,8 +36,7 @@ final class ThumbnailCache
             && 1 - ($free_bytes / $total_bytes) < self::MAXIMUM_USED_RATIO;
     }
 
-    public static function minimumFreeBytes(): int
-    {
+    public static function minimumFreeBytes(): int {
         $config = require ROOT_DIR . '/src/config.php';
         try {
             return ByteSize::bytes($config['thumbnailMinimumFreeBytes']);
@@ -53,8 +49,7 @@ final class ThumbnailCache
         }
     }
 
-    public static function thumbnail(int $item_id): ?ThumbnailPayload
-    {
+    public static function thumbnail(int $item_id): ?ThumbnailPayload {
         $file = ImageLoader::thumbnailFile($item_id);
 
         if (is_file($file)) {
@@ -123,8 +118,7 @@ final class ThumbnailCache
         }
     }
 
-    private static function item(int $item_id): ?\stdClass
-    {
+    private static function item(int $item_id): ?\stdClass {
         $select = mysqli_prepare(Database::connection(), '
 SELECT `url`
     FROM `Items`
@@ -140,8 +134,7 @@ SELECT `url`
         return $row !== null ? (object) $row : null;
     }
 
-    private static function fetch(string $source_url): ?string
-    {
+    private static function fetch(string $source_url): ?string {
         $url = new URL($source_url);
         $deadline = microtime(true) + self::ON_DEMAND_TIMEOUT_SECONDS;
         $visited = [];
@@ -196,8 +189,7 @@ SELECT `url`
         return null;
     }
 
-    private static function hasWriteCapacity(): bool
-    {
+    private static function hasWriteCapacity(): bool {
         if (self::$writeCapacity !== null) {
             return self::$writeCapacity;
         }
@@ -210,8 +202,7 @@ SELECT `url`
             && self::storageAllowsWrite($free_bytes, $total_bytes);
     }
 
-    private static function recentlyFailed(int $item_id): bool
-    {
+    private static function recentlyFailed(int $item_id): bool {
         $after = time() - self::FAILURE_COOLDOWN_SECONDS;
         $select = mysqli_prepare(Database::connection(), '
 SELECT 1
@@ -225,8 +216,7 @@ SELECT 1
         return mysqli_fetch_assoc(mysqli_stmt_get_result($select)) !== null;
     }
 
-    private static function recordFailure(int $item_id): void
-    {
+    private static function recordFailure(int $item_id): void {
         $failed_time = time();
         $insert = mysqli_prepare(Database::connection(), '
 INSERT INTO `ThumbnailFetchFailures` (`itemId`, `failedTime`)
@@ -237,8 +227,7 @@ INSERT INTO `ThumbnailFetchFailures` (`itemId`, `failedTime`)
         mysqli_stmt_execute($insert);
     }
 
-    private static function clearFailure(int $item_id): void
-    {
+    private static function clearFailure(int $item_id): void {
         $delete = mysqli_prepare(Database::connection(), '
 DELETE FROM `ThumbnailFetchFailures`
     WHERE `itemId` = ?
@@ -247,8 +236,7 @@ DELETE FROM `ThumbnailFetchFailures`
         mysqli_stmt_execute($delete);
     }
 
-    private static function acquireProcessingSlot(): ?string
-    {
+    private static function acquireProcessingSlot(): ?string {
         // Randomize the first probe so concurrent clients do not all compete
         // for the first slot while later slots remain available.
         $start = random_int(0, self::CONCURRENT_PROCESSING - 1);
@@ -264,8 +252,7 @@ DELETE FROM `ThumbnailFetchFailures`
         return null;
     }
 
-    private static function acquireFetchSlot(): ?string
-    {
+    private static function acquireFetchSlot(): ?string {
         $client = (string) ($_SERVER['REMOTE_ADDR'] ?? '');
 
         if ($client === '') {
@@ -285,8 +272,7 @@ DELETE FROM `ThumbnailFetchFailures`
         return null;
     }
 
-    private static function acquireLock(string $key, int $timeout_seconds): bool
-    {
+    private static function acquireLock(string $key, int $timeout_seconds): bool {
         $name = 'duskrail:' . md5($key);
         $select = mysqli_prepare(Database::connection(), '
 SELECT GET_LOCK(?, ?)
@@ -298,8 +284,7 @@ SELECT GET_LOCK(?, ?)
         return $row !== null && (int) $row[0] === 1;
     }
 
-    private static function releaseLock(string $key): void
-    {
+    private static function releaseLock(string $key): void {
         if ($key === '') {
             return;
         }

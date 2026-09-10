@@ -2,13 +2,11 @@
 
 declare(strict_types=1);
 
-class Anchor extends HTMLObject
-{
+class Anchor extends HTMLObject {
     public string $tagName = 'a';
     public ?string $href = null;
 
-    public function __construct(?string $href = null, ?string $text = null)
-    {
+    public function __construct(?string $href = null, ?string $text = null) {
         parent::__construct();
 
         $this -> href = $href;
@@ -18,8 +16,7 @@ class Anchor extends HTMLObject
         }
     }
 
-    public function toDOM(): \DOMElement
-    {
+    public function toDOM(): \DOMElement {
         if ($this -> href !== null) {
             $this -> attributes['href'] = $this -> href;
         }

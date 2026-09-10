@@ -2,13 +2,11 @@
 
 declare(strict_types=1);
 
-class MainNavigation extends HTMLObject
-{
+class MainNavigation extends HTMLObject {
     public string $tagName = 'nav';
     public ?string $class = 'MainNavigation navbar navbar-expand navbar-dark bg-dark fixed-top';
 
-    public function toDOM(): \DOMElement
-    {
+    public function toDOM(): \DOMElement {
         $config = require ROOT_DIR . '/src/config.php';
 
         $brand = new Anchor(ServerURL::absolute('/'), $config['siteTitle']);

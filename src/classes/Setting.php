@@ -14,12 +14,10 @@ declare(strict_types=1);
  * makes an install depend on ACLs and SELinux labels lining up on exactly the
  * right paths. A row costs none of that.
  */
-class Setting
-{
+class Setting {
     private const MAX_NAME_LENGTH = 64;
 
-    public static function value(string $name): ?string
-    {
+    public static function value(string $name): ?string {
         $select = mysqli_prepare(Database::connection(), '
 SELECT `value`
     FROM `Settings`
@@ -33,8 +31,7 @@ SELECT `value`
         return $row['value'] ?? null;
     }
 
-    public static function store(string $name, string $value): void
-    {
+    public static function store(string $name, string $value): void {
         $name = mb_substr($name, 0, self::MAX_NAME_LENGTH);
 
         $insert = mysqli_prepare(Database::connection(), '

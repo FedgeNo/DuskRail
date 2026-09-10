@@ -19,8 +19,7 @@ declare(strict_types=1);
  * equivalents). The ranges below are the ones it doesn't know about but that
  * still aren't somewhere on the public internet.
  */
-class IPAddress
-{
+class IPAddress {
     /**
      * Extra CIDR blocks refused on top of filter_var's private/reserved
      * flags, as [network, prefix length in bits].
@@ -39,8 +38,7 @@ class IPAddress
      * for anything that isn't a valid IP at all, and for every address that
      * belongs to this machine, this network, or a reserved block.
      */
-    public static function isPubliclyRoutable(string $address): bool
-    {
+    public static function isPubliclyRoutable(string $address): bool {
         $packedAddress = @inet_pton($address);
         $mappedPrefix = str_repeat(chr(0), 10) . chr(0xFF) . chr(0xFF);
 
@@ -79,8 +77,7 @@ class IPAddress
      * @return list<string> Empty when resolution failed or any answer is not
      * publicly routable.
      */
-    public static function publicAddressesFor(string $hostname): array
-    {
+    public static function publicAddressesFor(string $hostname): array {
         static $answers = [];
 
         $hostname = strtolower(trim($hostname, '.'));
@@ -120,8 +117,7 @@ class IPAddress
         return $answers[$hostname] = $addresses;
     }
 
-    public static function hostResolvesPublicly(string $hostname): bool
-    {
+    public static function hostResolvesPublicly(string $hostname): bool {
         return self::publicAddressesFor($hostname) !== [];
     }
 
@@ -132,8 +128,7 @@ class IPAddress
      * (inet_pton yields 4 bytes for one and 16 for the other; an address of a
      * different length to the network simply isn't in it).
      */
-    private static function isWithin(string $address, string $network, int $prefixBits): bool
-    {
+    private static function isWithin(string $address, string $network, int $prefixBits): bool {
         $packedAddress = @inet_pton($address);
         $packedNetwork = @inet_pton($network);
 

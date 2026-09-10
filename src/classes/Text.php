@@ -6,8 +6,7 @@ declare(strict_types=1);
  * Text handling shared by everything that puts crawled prose in front of a
  * reader.
  */
-class Text
-{
+class Text {
     /**
      * How many times one word may appear in a page's indexed text.
      *
@@ -63,8 +62,7 @@ class Text
      * original markup is still in fullHTML either way, so
      * bin/reextract-text.php can always rebuild this.
      */
-    public static function capRepeatedTerms(string $text): string
-    {
+    public static function capRepeatedTerms(string $text): string {
         $counts = [];
         $lines = explode(chr(10), $text);
 
@@ -94,8 +92,7 @@ class Text
      * bounds anything; splitting on whitespace alone leaves punctuation as a
      * way straight past the cap.
      */
-    private static function isWithinCap(string $word, array &$counts): bool
-    {
+    private static function isWithinCap(string $word, array &$counts): bool {
         $terms = preg_split('/[^\p{L}\p{N}]+/u', mb_strtolower($word), -1, PREG_SPLIT_NO_EMPTY) ?: [];
         $withinCap = true;
 
@@ -127,8 +124,7 @@ class Text
      * mb_substr, not substr - crawled text is utf8mb4 and cutting a
      * multi-byte character in half produces a broken sequence.
      */
-    public static function truncate(?string $text, int $maxLength): ?string
-    {
+    public static function truncate(?string $text, int $maxLength): ?string {
         if ($text === null || mb_strlen($text) <= $maxLength) {
             return $text;
         }

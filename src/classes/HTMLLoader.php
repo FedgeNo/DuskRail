@@ -11,8 +11,7 @@ declare(strict_types=1);
  * pages routinely declare their encoding only in the markup, and reading
  * those as UTF-8 indexed their entire text as mojibake.
  */
-class HTMLLoader
-{
+class HTMLLoader {
     /**
      * Matched like real CSS class selectors: a whole, exact token in the
      * space-separated class list (or the whole id), never a substring of a
@@ -72,8 +71,7 @@ class HTMLLoader
      */
     private const MAX_DESCRIPTION_SOURCE_LENGTH = 20000;
 
-    public static function load(string $html, ?string $charset): \DOMDocument
-    {
+    public static function load(string $html, ?string $charset): \DOMDocument {
         $bomCharset = self::bomCharset($html);
 
         if ($bomCharset !== null) {
@@ -130,8 +128,7 @@ class HTMLLoader
      * encoded the file, so it can't be out of step with the bytes the way a
      * copy-pasted meta tag or a misconfigured server header can.
      */
-    private static function bomCharset(string $html): ?string
-    {
+    private static function bomCharset(string $html): ?string {
         if (str_starts_with($html, chr(0xEF) . chr(0xBB) . chr(0xBF))) {
             return 'UTF-8';
         }
@@ -155,8 +152,7 @@ class HTMLLoader
      * a real declaration sits at the top of <head>, and anything claiming to
      * be one deep in the body text isn't.
      */
-    private static function sniffMetaCharset(string $html): ?string
-    {
+    private static function sniffMetaCharset(string $html): ?string {
         $head = substr($html, 0, 2048);
         $position = stripos($head, 'charset');
 
@@ -200,8 +196,7 @@ class HTMLLoader
      * resolve anything else. Only the first <base> with a real href counts;
      * later ones and hrefless <base target="...">-only tags are ignored.
      */
-    public static function baseURL(\DOMDocument $document, URL $pageURL): URL
-    {
+    public static function baseURL(\DOMDocument $document, URL $pageURL): URL {
         foreach ($document -> getElementsByTagName('base') as $base) {
             $href = trim($base -> getAttribute('href'));
 
@@ -226,8 +221,7 @@ class HTMLLoader
      * noindex keeps the page out of search results (it's still crawled, and
      * its links still count), nofollow stops link discovery on the page.
      */
-    public static function robotsDirectives(\DOMDocument $document): array
-    {
+    public static function robotsDirectives(\DOMDocument $document): array {
         $content = strtolower((string) self::metaContent($document, 'name', 'robots'));
         $tokens = array_map('trim', explode(',', $content));
 
@@ -245,8 +239,7 @@ class HTMLLoader
      * counts, same as <base>. A canonical equal to the page's own URL - by
      * far the common case - is still returned; the caller compares.
      */
-    public static function canonicalURL(\DOMDocument $document, URL $baseURL): ?URL
-    {
+    public static function canonicalURL(\DOMDocument $document, URL $baseURL): ?URL {
         foreach ($document -> getElementsByTagName('link') as $link) {
             $rel = preg_split('/\s+/', strtolower($link -> getAttribute('rel')), -1, PREG_SPLIT_NO_EMPTY);
 
@@ -296,8 +289,7 @@ class HTMLLoader
      * the document - the per-anchor/per-image description walks need it as
      * much as the body text does.
      */
-    public static function separateBlockElements(\DOMDocument $document): void
-    {
+    public static function separateBlockElements(\DOMDocument $document): void {
         $newline = chr(10);
 
         foreach (self::BLOCK_TAGS as $tagName) {
@@ -337,8 +329,7 @@ class HTMLLoader
      * attribute, not a child node. The padding keeps it from running into
      * whatever text sits right before/after the <img> in the markup.
      */
-    public static function inlineImageAltText(\DOMDocument $document): void
-    {
+    public static function inlineImageAltText(\DOMDocument $document): void {
         foreach ($document -> getElementsByTagName('img') as $img) {
             $alt = $img -> getAttribute('alt');
 
@@ -363,8 +354,7 @@ class HTMLLoader
      * garbage, empty). Anything that resolves to something isValid() reports
      * false for is dropped entirely, along with that img tag.
      */
-    public static function extractImageLinks(\DOMDocument $document, URL $baseURL): array
-    {
+    public static function extractImageLinks(\DOMDocument $document, URL $baseURL): array {
         $images = [];
         $descriptions = [];
 
@@ -407,8 +397,7 @@ class HTMLLoader
      * "#fragment-only", empty, or malformed hrefs all get dropped along with
      * their anchor tag rather than resolved into something used further.
      */
-    public static function extractAnchorLinks(\DOMDocument $document, URL $baseURL): array
-    {
+    public static function extractAnchorLinks(\DOMDocument $document, URL $baseURL): array {
         $links = [];
         $descriptions = [];
 
@@ -455,8 +444,7 @@ class HTMLLoader
      * a thousand links shares one parent, and that parent's text is the same
      * answer a thousand times over.
      */
-    private static function describingText(?\DOMNode $node, array &$cache): string
-    {
+    private static function describingText(?\DOMNode $node, array &$cache): string {
         if ($node === null) {
             return '';
         }
@@ -480,8 +468,7 @@ class HTMLLoader
      * comes back is always valid UTF-8 rather than a string ending in half a
      * character.
      */
-    private static function textUpTo(\DOMNode $node, int $maxLength): string
-    {
+    private static function textUpTo(\DOMNode $node, int $maxLength): string {
         $text = '';
         $stack = [$node];
 
@@ -511,8 +498,7 @@ class HTMLLoader
      * whatever a JSON-LD block declares - each source only fills in what the
      * one before it left empty, rather than overriding it.
      */
-    public static function extractMetadata(\DOMDocument $document): array
-    {
+    public static function extractMetadata(\DOMDocument $document): array {
         $title = $document -> getElementsByTagName('title') -> item(0) ?-> textContent;
         $title = self::firstNonEmpty([$title, self::metaContent($document, 'property', 'og:title'), self::metaContent($document, 'name', 'twitter:title')]);
 
@@ -541,8 +527,7 @@ class HTMLLoader
      * extractMetadata() (which still needs <script type="application/
      * ld+json"> intact) and right before extractBodyText().
      */
-    public static function removeStyleAndScriptTags(\DOMDocument $document): void
-    {
+    public static function removeStyleAndScriptTags(\DOMDocument $document): void {
         foreach (['style', 'script'] as $tagName) {
             self::removeElements($document -> getElementsByTagName($tagName));
         }
@@ -557,8 +542,7 @@ class HTMLLoader
      * removeStyleAndScriptTags(), this only matters for what fullText ends
      * up containing, not for image/link discovery earlier in the crawl.
      */
-    public static function removeBoilerplateElements(\DOMDocument $document): void
-    {
+    public static function removeBoilerplateElements(\DOMDocument $document): void {
         foreach (['nav', 'header', 'footer', 'aside'] as $tagName) {
             self::removeElements($document -> getElementsByTagName($tagName));
         }
@@ -577,8 +561,7 @@ class HTMLLoader
         }
     }
 
-    private static function isBoilerplateElement(\DOMElement $element): bool
-    {
+    private static function isBoilerplateElement(\DOMElement $element): bool {
         $class = $element -> getAttribute('class');
         $id = $element -> getAttribute('id');
 
@@ -616,8 +599,7 @@ class HTMLLoader
      * class), where the same "utility class reused for real content" risk
      * that ruled out this looser matching for class doesn't apply.
      */
-    private static function idBoundaryPattern(): string
-    {
+    private static function idBoundaryPattern(): string {
         static $pattern = null;
 
         return $pattern ??= '/\b(?:' . implode('|', array_map(fn (string $token) => preg_quote($token, '/'), self::BOILERPLATE_CLASS_TOKENS)) . ')\b/i';
@@ -628,8 +610,7 @@ class HTMLLoader
      * directly would shift indices and skip elements, so it's snapshotted
      * into a plain array first.
      */
-    private static function removeElements(\DOMNodeList $elements): void
-    {
+    private static function removeElements(\DOMNodeList $elements): void {
         foreach (iterator_to_array($elements) as $element) {
             $element -> parentNode ?-> removeChild($element);
         }
@@ -642,8 +623,7 @@ class HTMLLoader
      * bloat what actually gets stored/searched. Runs after
      * inlineImageAltText(), so img alt text rides along as part of this too.
      */
-    public static function extractBodyText(\DOMDocument $document): string
-    {
+    public static function extractBodyText(\DOMDocument $document): string {
         $body = $document -> getElementsByTagName('body') -> item(0);
 
         return self::normalizeWhitespace($body ?-> textContent ?? '');
@@ -661,8 +641,7 @@ class HTMLLoader
      * what came out of a DOM walk - the plain-text and PDF paths in
      * bin/crawler.php produce raw text with the same problem.
      */
-    public static function normalizeWhitespace(string $text): string
-    {
+    public static function normalizeWhitespace(string $text): string {
         $text = str_replace([chr(13) . chr(10), chr(13)], chr(10), $text);
         $text = preg_replace('/[^\S\n]+/', ' ', $text);
         $text = preg_replace('/ *\n */', chr(10), $text);
@@ -671,8 +650,7 @@ class HTMLLoader
         return trim($text);
     }
 
-    private static function metaContent(\DOMDocument $document, string $attribute, string $value): ?string
-    {
+    private static function metaContent(\DOMDocument $document, string $attribute, string $value): ?string {
         foreach ($document -> getElementsByTagName('meta') as $meta) {
             if (strcasecmp($meta -> getAttribute($attribute), $value) === 0) {
                 $content = trim($meta -> getAttribute('content'));
@@ -686,8 +664,7 @@ class HTMLLoader
         return null;
     }
 
-    private static function firstNonEmpty(array $candidates): ?string
-    {
+    private static function firstNonEmpty(array $candidates): ?string {
         foreach ($candidates as $candidate) {
             if (is_string($candidate) && trim($candidate) !== '') {
                 return trim($candidate);
@@ -697,8 +674,7 @@ class HTMLLoader
         return null;
     }
 
-    private static function stringValue(mixed $value): ?string
-    {
+    private static function stringValue(mixed $value): ?string {
         return is_string($value) && trim($value) !== '' ? trim($value) : null;
     }
 
@@ -707,8 +683,7 @@ class HTMLLoader
      * an array of strings - normalized to the same comma-separated string
      * this project's own keywords column expects either way.
      */
-    private static function keywordsValue(mixed $value): ?string
-    {
+    private static function keywordsValue(mixed $value): ?string {
         if (is_string($value)) {
             return self::stringValue($value);
         }
@@ -727,8 +702,7 @@ class HTMLLoader
      * "@graph" wrapper each hold multiple separate entries, flattened here
      * into one flat list either way.
      */
-    private static function jsonLDEntries(\DOMDocument $document): array
-    {
+    private static function jsonLDEntries(\DOMDocument $document): array {
         $entries = [];
 
         foreach ($document -> getElementsByTagName('script') as $script) {
@@ -763,8 +737,7 @@ class HTMLLoader
      * The raw text is tried first so already-valid JSON-LD - the normal case
      * - is never needlessly run through entity decoding at all.
      */
-    private static function decodeJSONLD(string $json): ?array
-    {
+    private static function decodeJSONLD(string $json): ?array {
         $decoded = json_decode($json, true);
 
         if (json_last_error() === JSON_ERROR_NONE && is_array($decoded)) {

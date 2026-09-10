@@ -17,8 +17,7 @@ declare(strict_types=1);
  * redirect, reload) is real network activity - that's unavoidable, since
  * defeating the challenge is the entire point.
  */
-class HeadlessBrowser
-{
+class HeadlessBrowser {
     private const HANDSHAKE_TIMEOUT_SECONDS = 3.0;
 
     // Kept short deliberately - the total (this plus whatever the caller's
@@ -78,8 +77,7 @@ class HeadlessBrowser
      * reachable, or if anything along the way (navigation, the challenge
      * itself) didn't finish inside its budget.
      */
-    public static function resolveChallenge(string $hostAndPort, string $html, URL $pageURL): ?string
-    {
+    public static function resolveChallenge(string $hostAndPort, string $html, URL $pageURL): ?string {
         try {
             $tab = new ChromeTab($hostAndPort, self::HANDSHAKE_TIMEOUT_SECONDS);
         } catch (\Throwable) {
@@ -101,8 +99,7 @@ class HeadlessBrowser
      * (and, per SETTLE_SECONDS, whatever the challenge does right after) to
      * settle, then read back the resulting DOM.
      */
-    private static function run(ChromeTab $tab, string $html, URL $pageURL): ?string
-    {
+    private static function run(ChromeTab $tab, string $html, URL $pageURL): ?string {
         $pageURLString = $pageURL -> toString();
 
         $tab -> sendCommand('Network.setUserAgentOverride', [
@@ -179,8 +176,7 @@ class HeadlessBrowser
         return $response['result']['result']['value'] ?? null;
     }
 
-    private static function handleRequestPaused(ChromeTab $tab, array $params, URL $pageURL, string $html, bool &$mainDocumentFulfilled): void
-    {
+    private static function handleRequestPaused(ChromeTab $tab, array $params, URL $pageURL, string $html, bool &$mainDocumentFulfilled): void {
         $requestId = $params['requestId'];
         $isMainDocument = !$mainDocumentFulfilled
             && ($params['resourceType'] ?? null) === 'Document'
@@ -229,8 +225,7 @@ class HeadlessBrowser
      * internet - resolved for real rather than pattern-matched on the name,
      * since a name is not an address (see IPAddress).
      */
-    public static function isAllowedChallengeTarget(string $url, URL $pageURL): bool
-    {
+    public static function isAllowedChallengeTarget(string $url, URL $pageURL): bool {
         $scheme = strtolower((string) parse_url($url, PHP_URL_SCHEME));
         $host = strtolower((string) parse_url($url, PHP_URL_HOST));
 
@@ -254,8 +249,7 @@ class HeadlessBrowser
     }
 
     /** Pure hostname scope policy, kept public so its boundary is testable. */
-    public static function isAllowedChallengeHost(string $host, URL $pageURL): bool
-    {
+    public static function isAllowedChallengeHost(string $host, URL $pageURL): bool {
         $host = strtolower(trim($host, '.'));
 
         if ($host === '' || filter_var($host, FILTER_VALIDATE_IP) !== false) {
@@ -271,8 +265,7 @@ class HeadlessBrowser
      * BLOCKED_HOST_SUFFIXES). Suffix matching is anchored on a dot boundary
      * so "evilgoogletagmanager.com" isn't caught by "googletagmanager.com".
      */
-    private static function isBlocked(string $url): bool
-    {
+    private static function isBlocked(string $url): bool {
         $host = strtolower((string) parse_url($url, PHP_URL_HOST));
 
         if ($host === '') {

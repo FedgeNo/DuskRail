@@ -11,16 +11,14 @@ declare(strict_types=1);
  * threshold is a multiple of how often the manager refreshes it, so one
  * delayed write doesn't read as a crash.
  */
-class CrawlerStatus
-{
+class CrawlerStatus {
     private const STALE_AFTER_SECONDS = 45;
 
     public bool $running = false;
     public ?int $lastHeartbeatTime = null;
     public int $crawledLastHour = 0;
 
-    public function __construct()
-    {
+    public function __construct() {
         $heartbeat = Setting::value(CRAWLER_HEARTBEAT_SETTING);
         $this -> lastHeartbeatTime = $heartbeat !== null ? (int) $heartbeat : null;
         $this -> running = $this -> lastHeartbeatTime !== null && time() - $this -> lastHeartbeatTime <= self::STALE_AFTER_SECONDS;
@@ -37,8 +35,7 @@ SELECT COUNT(*) AS `crawledLastHour`
         $this -> crawledLastHour = (int) mysqli_fetch_assoc(mysqli_stmt_get_result($select))['crawledLastHour'];
     }
 
-    public function toJSON(): array
-    {
+    public function toJSON(): array {
         return [
             'running' => $this -> running,
             'lastHeartbeatTime' => $this -> lastHeartbeatTime,

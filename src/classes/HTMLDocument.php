@@ -2,8 +2,7 @@
 
 declare(strict_types=1);
 
-class HTMLDocument extends HTMLObject
-{
+class HTMLDocument extends HTMLObject {
     public string $tagName = 'html';
 
     // Screen readers pick their pronunciation rules from this, and there's no
@@ -14,15 +13,13 @@ class HTMLDocument extends HTMLObject
     public Head $head;
     public Body $body;
 
-    public function __construct()
-    {
+    public function __construct() {
         parent::__construct();
         $this -> head = new Head();
         $this -> body = new Body();
     }
 
-    public function addHeadContent(HTMLObject|CData|string|\DOMNode $item): void
-    {
+    public function addHeadContent(HTMLObject|CData|string|\DOMNode $item): void {
         $this -> head -> addContent($item);
     }
 
@@ -31,13 +28,11 @@ class HTMLDocument extends HTMLObject
      * has are <head> and <body>, so the inherited append-to-own-contents
      * behavior could only ever produce invalid markup here.
      */
-    public function addContent(HTMLObject|CData|string|\DOMNode $item): void
-    {
+    public function addContent(HTMLObject|CData|string|\DOMNode $item): void {
         $this -> body -> addContent($item);
     }
 
-    public function toDOM(): \DOMElement
-    {
+    public function toDOM(): \DOMElement {
         $implementation = new \DOMImplementation();
         $doctype = $implementation -> createDocumentType('html');
 
@@ -56,8 +51,7 @@ class HTMLDocument extends HTMLObject
         return $html;
     }
 
-    public function __toString(): string
-    {
+    public function __toString(): string {
         $html = $this -> toDOM();
 
         self::fillEmptyNonVoidTags($html);
@@ -67,8 +61,7 @@ class HTMLDocument extends HTMLObject
             . self::stripSelfClosingSlash(self::$document -> saveXML(self::$document -> documentElement));
     }
 
-    public function send(): void
-    {
+    public function send(): void {
         // Everything this site renders is untrusted text off the open web,
         // so even with textContent-only DOM building throughout, the pages
         // declare that scripts and styles only ever come from this origin -

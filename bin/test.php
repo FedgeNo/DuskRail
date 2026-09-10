@@ -24,8 +24,7 @@ require __DIR__ . '/../init.php';
 $GLOBALS['testsPassed'] = 0;
 $GLOBALS['testsFailed'] = 0;
 
-function assert_same(string $label, mixed $expected, mixed $actual): void
-{
+function assert_same(string $label, mixed $expected, mixed $actual): void {
     if ($expected === $actual) {
         $GLOBALS['testsPassed']++;
 
@@ -39,13 +38,11 @@ function assert_same(string $label, mixed $expected, mixed $actual): void
 ');
 }
 
-function assert_true(string $label, bool $actual): void
-{
+function assert_true(string $label, bool $actual): void {
     assert_same($label, true, $actual);
 }
 
-function assert_false(string $label, bool $actual): void
-{
+function assert_false(string $label, bool $actual): void {
     assert_same($label, false, $actual);
 }
 

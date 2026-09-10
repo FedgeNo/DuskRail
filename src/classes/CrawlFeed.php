@@ -16,8 +16,7 @@ declare(strict_types=1);
  * crawledTime after a failure (see Item::delete()), so this feed can't
  * surface junk.
  */
-class CrawlFeed
-{
+class CrawlFeed {
     // How many rows a single poll can return, whether it's the initial seed
     // or a normal forward-poll batch.
     private const BATCH_SIZE = 50;
@@ -26,8 +25,7 @@ class CrawlFeed
     public array $items = [];
     public int $since;
 
-    public function __construct(int $since)
-    {
+    public function __construct(int $since) {
         $this -> since = max(0, $since);
 
         foreach ($this -> rows() as $row) {
@@ -35,13 +33,11 @@ class CrawlFeed
         }
     }
 
-    public function toJSON(): array
-    {
+    public function toJSON(): array {
         return array_map(static fn (CrawlFeedItem $item): array => $item -> toJSON(), $this -> items);
     }
 
-    private function rows(): array
-    {
+    private function rows(): array {
         return $this -> since === 0 ? $this -> seedRows() : $this -> forwardRows();
     }
 
@@ -61,8 +57,7 @@ class CrawlFeed
      * tiebreak here buys nothing the polling protocol doesn't already
      * guarantee.
      */
-    private function seedRows(): array
-    {
+    private function seedRows(): array {
         $result = mysqli_query(Database::connection(), '
 SELECT `itemId`, `url`, `type`, `title`, `description`, `crawledTime`
     FROM `Items`
@@ -74,8 +69,7 @@ SELECT `itemId`, `url`, `type`, `title`, `description`, `crawledTime`
         return $result !== false ? array_reverse(mysqli_fetch_all($result, MYSQLI_ASSOC)) : [];
     }
 
-    private function forwardRows(): array
-    {
+    private function forwardRows(): array {
         $select = mysqli_prepare(Database::connection(), '
 SELECT `itemId`, `url`, `type`, `title`, `description`, `crawledTime`
     FROM `Items`

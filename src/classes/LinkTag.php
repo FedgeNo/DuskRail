@@ -9,15 +9,13 @@ declare(strict_types=1);
  * same kind of reason - a primitive whose literal tag name collides with a
  * more important domain concept gets a descriptive name instead.
  */
-class LinkTag extends HTMLVoidElement
-{
+class LinkTag extends HTMLVoidElement {
     public string $tagName = 'link';
     public ?string $rel = null;
     public ?string $href = null;
     public ?string $type = null;
 
-    public function toDOM(): \DOMElement
-    {
+    public function toDOM(): \DOMElement {
         if ($this -> rel !== null) {
             $this -> attributes['rel'] = $this -> rel;
         }

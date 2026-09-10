@@ -18,8 +18,7 @@ declare(strict_types=1);
  * eventually, since a 404 today can be a real page next year and this is the
  * only thing stopping it ever being looked at again.
  */
-class DeadURL
-{
+class DeadURL {
     // Matches Items.url - the same URL string is stored in both, so they
     // truncate at the same point or a long URL would be recorded dead under a
     // string that never matches the one being looked up.
@@ -38,8 +37,7 @@ class DeadURL
      * INSERT IGNORE: a URL that dies again after being let back in should
      * have its clock restarted, not keep the timestamp from the first time.
      */
-    public static function record(string $url, string $reason): void
-    {
+    public static function record(string $url, string $reason): void {
         $connection = Database::connection();
         $url = mb_substr($url, 0, self::MAX_URL_LENGTH);
         $reason = mb_substr($reason, 0, self::MAX_REASON_LENGTH);
@@ -59,8 +57,7 @@ INSERT INTO `DeadURLs` (`url`, `reason`, `deadTime`)
      * doesn't count and is deleted on the way past, so the table stays the
      * size of the crawl's live dead-URL set rather than growing forever.
      */
-    public static function isDead(string $url): bool
-    {
+    public static function isDead(string $url): bool {
         $connection = Database::connection();
         $url = mb_substr($url, 0, self::MAX_URL_LENGTH);
 
@@ -102,8 +99,7 @@ DELETE FROM `DeadURLs`
      * as isDead() does for a single lookup - otherwise batching would mean
      * nothing ever prunes the table.
      */
-    public static function deadAmong(array $urls): array
-    {
+    public static function deadAmong(array $urls): array {
         if ($urls === []) {
             return [];
         }
@@ -166,8 +162,7 @@ DELETE FROM `DeadURLs`
      * it is real evidence the site still serves it, which outranks a verdict
      * reached some time ago.
      */
-    public static function forget(string $url): void
-    {
+    public static function forget(string $url): void {
         $url = mb_substr($url, 0, self::MAX_URL_LENGTH);
 
         $delete = mysqli_prepare(Database::connection(), '

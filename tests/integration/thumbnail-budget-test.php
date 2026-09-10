@@ -4,36 +4,29 @@ declare(strict_types=1);
 
 // Only the network fetch and image decoder are stubs. Slot ownership and
 // item/failure queries run against an isolated MariaDB instance.
-final class HTTPConnection
-{
+final class HTTPConnection {
     public ?int $statusCode = 200;
     public bool $bodyTruncated = false;
 
-    public function __construct(URL $url, int $timeout)
-    {
+    public function __construct(URL $url, int $timeout) {
         check_budget('fetch');
     }
 
-    public function contentType(): ContentType
-    {
+    public function contentType(): ContentType {
         return new ContentType('image/jpeg');
     }
 
-    public function readBody(): string
-    {
+    public function readBody(): string {
         return 'fixture bytes';
     }
 }
 
-final class ImageLoader
-{
-    public static function thumbnailFile(int $id): string
-    {
+final class ImageLoader {
+    public static function thumbnailFile(int $id): string {
         return $GLOBALS['directory'] . '/thumbnail-' . $id . '.jpg';
     }
 
-    public static function thumbnailBytes(string $bytes): string
-    {
+    public static function thumbnailBytes(string $bytes): string {
         check_budget('decode');
 
         if ($GLOBALS['throw_decode']) {
@@ -69,21 +62,18 @@ $_SERVER['REMOTE_ADDR'] = '192.0.2.1';
 $passed = 0;
 $throw_decode = false;
 
-function check(string $label, mixed $expected, mixed $actual): void
-{
+function check(string $label, mixed $expected, mixed $actual): void {
     if ($expected !== $actual) {
         throw new RuntimeException($label . ': expected ' . var_export($expected, true) . ', got ' . var_export($actual, true));
     }
     $GLOBALS['passed']++;
 }
 
-function lock_name(string $key): string
-{
+function lock_name(string $key): string {
     return 'duskrail:' . md5($key);
 }
 
-function used_slots(): int
-{
+function used_slots(): int {
     $used = 0;
     for ($i = 0; $i < 18; $i++) {
         $name = lock_name('thumbnail-global:' . $i);
@@ -95,8 +85,7 @@ function used_slots(): int
     return $used;
 }
 
-function check_budget(string $stage): void
-{
+function check_budget(string $stage): void {
     check($stage . ' holds global slot', 1, used_slots());
     $name = lock_name('thumbnail-client:' . hash('sha256', $_SERVER['REMOTE_ADDR']) . ':0');
     $select = mysqli_prepare($GLOBALS['other'], 'SELECT IS_USED_LOCK(?)');
@@ -105,8 +94,7 @@ function check_budget(string $stage): void
     check($stage . ' holds client slot', true, mysqli_fetch_row(mysqli_stmt_get_result($select))[0] !== null);
 }
 
-function check_released(int $item_id): void
-{
+function check_released(int $item_id): void {
     foreach (['thumbnail:' . $item_id, 'thumbnail-client:' . hash('sha256', $_SERVER['REMOTE_ADDR']) . ':0'] as $key) {
         $name = lock_name($key);
         $select = mysqli_prepare($GLOBALS['other'], 'SELECT IS_USED_LOCK(?)');

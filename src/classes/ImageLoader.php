@@ -13,8 +13,7 @@ declare(strict_types=1);
  * Nothing here fetches. ThumbnailCache supplies bytes only when a reader asks
  * for an uncached thumbnail.
  */
-class ImageLoader
-{
+class ImageLoader {
     // ~40 megapixels - comfortably above any real photo or screenshot a page
     // would actually serve, well below what a crafted small file can claim.
     private const MAX_PIXELS = 40_000_000;
@@ -35,8 +34,7 @@ class ImageLoader
      * of truth for the sharding scheme. Null for anything that isn't an
      * image, since only images ever get one.
      */
-    public static function thumbnailURL(int $item_id, ?string $type): ?string
-    {
+    public static function thumbnailURL(int $item_id, ?string $type): ?string {
         if ($type === null || !str_starts_with($type, 'image/')) {
             return null;
         }
@@ -44,8 +42,7 @@ class ImageLoader
         return '/thumbnails/' . self::shard($item_id) . '/' . $item_id . '.jpg';
     }
 
-    public static function thumbnailDirectory(): string
-    {
+    public static function thumbnailDirectory(): string {
         if (self::$thumbnailDirectory === null) {
             $config = require ROOT_DIR . '/src/config.php';
             $directory = rtrim($config['thumbnailDirectory'], '/');
@@ -60,8 +57,7 @@ class ImageLoader
         return self::$thumbnailDirectory;
     }
 
-    public static function thumbnailBytes(string $data): ?string
-    {
+    public static function thumbnailBytes(string $data): ?string {
         $size = @getimagesizefromstring($data);
 
         if ($size === false) {
@@ -92,8 +88,7 @@ class ImageLoader
      * so leaving it behind just accumulates orphans nothing will ever serve
      * or clean up.
      */
-    public static function deleteThumbnail(int $item_id): void
-    {
+    public static function deleteThumbnail(int $item_id): void {
         $path = self::thumbnailFile($item_id);
 
         if (is_file($path)) {
@@ -101,8 +96,7 @@ class ImageLoader
         }
     }
 
-    private static function areDimensionsUsable(int $width, int $height): bool
-    {
+    private static function areDimensionsUsable(int $width, int $height): bool {
         if ($width <= 0 || $height <= 0 || $width * $height > self::MAX_PIXELS) {
             return false;
         }
@@ -110,8 +104,7 @@ class ImageLoader
         return $width >= self::MIN_DIMENSION && $height >= self::MIN_DIMENSION;
     }
 
-    public static function storeThumbnail(int $item_id, string $bytes): string
-    {
+    public static function storeThumbnail(int $item_id, string $bytes): string {
         $file = self::thumbnailFile($item_id);
         $directory = dirname($file);
 
@@ -132,13 +125,11 @@ class ImageLoader
         return $file;
     }
 
-    public static function thumbnailFile(int $item_id): string
-    {
+    public static function thumbnailFile(int $item_id): string {
         return self::thumbnailDirectory() . '/' . self::shard($item_id) . '/' . $item_id . '.jpg';
     }
 
-    private static function resizedJPEG(\GdImage $image): ?string
-    {
+    private static function resizedJPEG(\GdImage $image): ?string {
         $width = imagesx($image);
         $height = imagesy($image);
 
@@ -164,8 +155,7 @@ class ImageLoader
     }
 
     /** Three base-100 directory levels, each named from 00 through 99. */
-    private static function shard(int $item_id): string
-    {
+    private static function shard(int $item_id): string {
         return sprintf(
             '%02d/%02d/%02d',
             $item_id % 100,

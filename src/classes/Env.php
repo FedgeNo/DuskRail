@@ -2,12 +2,10 @@
 
 declare(strict_types=1);
 
-class Env
-{
+class Env {
     private static ?array $values = null;
 
-    public static function get(string $key, string $default = ''): string
-    {
+    public static function get(string $key, string $default = ''): string {
         if (self::$values === null) {
             self::$values = self::load();
         }
@@ -15,8 +13,7 @@ class Env
         return self::$values[$key] ?? $default;
     }
 
-    private static function load(): array
-    {
+    private static function load(): array {
         $path = ROOT_DIR . '/.env';
 
         // Genuinely absent is fine - a fresh clone hasn't been through

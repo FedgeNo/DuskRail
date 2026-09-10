@@ -2,8 +2,7 @@
 
 declare(strict_types=1);
 
-class Item
-{
+class Item {
     // Matches schema.sql's column definitions - kept here so every write
     // path truncates to the same limits instead of finding out about them
     // one "Data too long" mysqli_sql_exception at a time. fullText/fullHTML
@@ -68,8 +67,7 @@ class Item
      * they're read leniently rather than assumed - every other column is
      * always selected.
      */
-    public static function fromRow(array $row): self
-    {
+    public static function fromRow(array $row): self {
         $item = new self();
 
         $item -> itemId = (int) $row['itemId'];
@@ -130,8 +128,7 @@ class Item
      * now-claimed-elsewhere row) rather than assuming its own pick still
      * stands.
      */
-    public static function nextToCrawl(?string $topic = null): ?self
-    {
+    public static function nextToCrawl(?string $topic = null): ?self {
         for ($attempt = 0; $attempt < self::MAX_CLAIM_ATTEMPTS; $attempt++) {
             $row = self::selectCandidateRow($topic);
 
@@ -180,8 +177,7 @@ class Item
      * index yields for free, no sort), then stalled claims last. Each class
      * stops at the first eligible row it finds.
      */
-    private static function selectCandidateRow(?string $topic): ?array
-    {
+    private static function selectCandidateRow(?string $topic): ?array {
         $connection = Database::connection();
 
         if ($topic !== null && trim($topic) !== '') {
@@ -257,8 +253,7 @@ SELECT `Items`.`itemId`, `Items`.`hostId`
      * returning null lets the default order take over, which is also what
      * happens once the on-topic pool is exhausted.
      */
-    private static function selectFocusedCandidateRow(string $topic): ?array
-    {
+    private static function selectFocusedCandidateRow(string $topic): ?array {
         try {
             $candidates = LinkSearchIndex::focusedCandidates($topic, 10000);
         } catch (SearchIndexUnavailable $exception) {
@@ -315,8 +310,7 @@ SELECT `Items`.`itemId`, `Items`.`hostId`, `Items`.`claimedUntil`
      * is about to delete. Dragging them across the wire per pick was pure
      * cost. findWithContentById() is the one for a caller that wants them.
      */
-    public static function findById(int $itemId): ?self
-    {
+    public static function findById(int $itemId): ?self {
         $select = mysqli_prepare(Database::connection(), '
 SELECT `itemId`, `url`, `hostId`, `type`, `title`, `description`, `keywords`,
         `crawledTime`, `noindex`, `contentHash`, `recrawlAfterSeconds`, `recrawlDueTime`,
@@ -336,8 +330,7 @@ SELECT `itemId`, `url`, `hostId`, `type`, `title`, `description`, `keywords`,
      * findById() plus the stored page content, for the one caller that
      * genuinely re-reads it (bin/reextract-text.php).
      */
-    public static function findWithContentById(int $itemId): ?self
-    {
+    public static function findWithContentById(int $itemId): ?self {
         $select = mysqli_prepare(Database::connection(), '
 SELECT *
     FROM `Items`
@@ -359,8 +352,7 @@ SELECT *
      * another worker already holds a live claim on it, so the caller can bow
      * out rather than double-crawl the same URL.
      */
-    public function reclaim(): bool
-    {
+    public function reclaim(): bool {
         return self::claim($this -> itemId);
     }
 
@@ -371,8 +363,7 @@ SELECT *
      * rows > 0) if no other concurrent caller claimed it first in the gap
      * between that SELECT and this UPDATE.
      */
-    private static function claim(int $itemId): bool
-    {
+    private static function claim(int $itemId): bool {
         $connection = Database::connection();
         $claimedUntil = time() + self::CLAIM_WINDOW_SECONDS;
 
@@ -411,8 +402,7 @@ UPDATE `Items`
      * queued than it can work through (Host::hasPendingCapacity()). Callers
      * discovering links are expected to simply skip those.
      */
-    public static function findOrCreateByURL(URL $url, string $type, ?string $title = null, ?string $description = null): ?self
-    {
+    public static function findOrCreateByURL(URL $url, string $type, ?string $title = null, ?string $description = null): ?self {
         $connection = Database::connection();
         $urlString = self::truncate($url -> toString(), self::MAX_URL_LENGTH);
         $type = self::truncate($type, self::MAX_TYPE_LENGTH);
@@ -491,8 +481,7 @@ INSERT INTO `Items` (`url`, `hostId`, `type`, `title`, `description`, `inc`)
      *
      * @return array<string, self>
      */
-    public static function findOrCreateManyByURL(array $discoveries): array
-    {
+    public static function findOrCreateManyByURL(array $discoveries): array {
         if ($discoveries === []) {
             return [];
         }
@@ -648,8 +637,7 @@ SELECT `itemId`, `url`, `hostId`, `type`, `title`, `description`, `keywords`,
      *
      * @param list<int> $itemIds
      */
-    public static function countInboundLinks(array $itemIds): void
-    {
+    public static function countInboundLinks(array $itemIds): void {
         if ($itemIds === []) {
             return;
         }
@@ -694,13 +682,11 @@ UPDATE `Items`
      * only for future re-processing, and it compresses to about a quarter.
      * decompressedFullHTML() is the matching reader.
      */
-    public function markCrawled(string $type, ?string $title, ?string $description, ?string $keywords, ?string $fullText, ?string $fullHTML, int $noindex = 0, bool $processSearchIndex = true): void
-    {
+    public function markCrawled(string $type, ?string $title, ?string $description, ?string $keywords, ?string $fullText, ?string $fullHTML, int $noindex = 0, bool $processSearchIndex = true): void {
         $this -> markCrawledContent($type, $title, $description, $keywords, new CrawlContent($fullText, $fullHTML), $noindex, $processSearchIndex);
     }
 
-    public function markCrawledContent(string $type, ?string $title, ?string $description, ?string $keywords, CrawlContent $content, int $noindex = 0, bool $processSearchIndex = true): void
-    {
+    public function markCrawledContent(string $type, ?string $title, ?string $description, ?string $keywords, CrawlContent $content, int $noindex = 0, bool $processSearchIndex = true): void {
         $connection = Database::connection();
         $now = time();
 
@@ -747,8 +733,7 @@ UPDATE `Items`
      * existed hold plain text - told apart by the gzip magic bytes, so both
      * generations read back correctly without a migration pass.
      */
-    public function decompressedFullHTML(): ?string
-    {
+    public function decompressedFullHTML(): ?string {
         if ($this -> fullHTML === null) {
             return null;
         }
@@ -774,8 +759,7 @@ UPDATE `Items`
      * clearing a row out of the index by hand, say, which shouldn't stop it
      * ever being crawled again.
      */
-    public function delete(?string $reason = null): void
-    {
+    public function delete(?string $reason = null): void {
         if ($reason !== null) {
             DeadURL::record($this -> url, $reason);
         }
@@ -811,8 +795,7 @@ DELETE FROM `Items`
      * 301 to a new site, a CDN move, ...), not just add/drop a trailing
      * slash on the same one.
      */
-    public function redirectTo(URL $newURL): ?self
-    {
+    public function redirectTo(URL $newURL): ?self {
         $connection = Database::connection();
         $newURLString = self::truncate($newURL -> toString(), self::MAX_URL_LENGTH);
         $newHostId = Host::findOrCreateByName($newURL -> host) -> hostId;
@@ -913,8 +896,7 @@ INSERT IGNORE INTO `Links` (`parentId`, `childId`, `description`)
      * throwing a mysqli_sql_exception and killing the whole crawl process
      * over one pathological page.
      */
-    private static function truncate(?string $value, int $maxLength): ?string
-    {
+    private static function truncate(?string $value, int $maxLength): ?string {
         return $value !== null ? mb_substr($value, 0, $maxLength) : null;
     }
 }

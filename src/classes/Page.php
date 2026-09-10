@@ -2,10 +2,8 @@
 
 declare(strict_types=1);
 
-class Page
-{
-    public static function create(string $title): HTMLDocument
-    {
+class Page {
+    public static function create(string $title): HTMLDocument {
         $page = new HTMLDocument();
 
         $config = require ROOT_DIR . '/src/config.php';
