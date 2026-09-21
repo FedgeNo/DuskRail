@@ -201,7 +201,6 @@ class ChromeTab {
             CURLOPT_TIMEOUT => self::HTTP_TIMEOUT_SECONDS,
         ]);
         $response = curl_exec($ch);
-        curl_close($ch);
 
         $decoded = is_string($response) ? json_decode($response, true) : null;
         $url = $decoded['webSocketDebuggerUrl'] ?? null;

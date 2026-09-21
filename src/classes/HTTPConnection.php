@@ -180,7 +180,6 @@ class HTTPConnection {
 
         curl_multi_remove_handle($this -> multiHandle, $this -> easyHandle);
         curl_multi_close($this -> multiHandle);
-        curl_close($this -> easyHandle);
 
         $this -> bodyRead = true;
 

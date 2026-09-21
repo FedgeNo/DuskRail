@@ -232,7 +232,6 @@ class ChromeProcess {
             CURLOPT_TIMEOUT => self::HEALTH_CHECK_TIMEOUT_SECONDS,
         ]);
         $response = curl_exec($ch);
-        curl_close($ch);
 
         return is_string($response) && $response !== '';
     }
