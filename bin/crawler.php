@@ -563,15 +563,11 @@ if (in_array($metadata['title'], JS_CHALLENGE_TITLES, true)) {
 
     if (in_array($metadata['title'], JS_CHALLENGE_TITLES, true)) {
         // Still a challenge - no headless browser available, or it timed
-        // out, or the challenge script itself didn't resolve inside its
-        // budget. Mark crawled anyway (so nextToCrawl() stops retrying it)
-        // but keep whatever title/description this item already had from
-        // being discovered as a link, rather than overwriting them with the
-        // challenge page's own placeholder metadata. fullHTML is still
-        // saved - useful for a future retry once headless browsing works
-        // for this site, or is available at all.
-        $item -> markCrawled($contentType -> type, $item -> title, $item -> description, $item -> keywords, null, $html, $headerDirectives['noindex'] ? 1 : 0);
-        echo 'JS challenge page, marked crawled (kept existing title/description).
+        // out, or the challenge script itself did not resolve inside its
+        // budget. Tombstone it like every other permanently unusable page so
+        // discovery does not immediately submit the same challenge again.
+        $item -> delete('js-challenge-unresolved');
+        echo 'JS challenge could not be resolved, tombstoned this item.
 ';
         exit(0);
     }
