@@ -77,7 +77,6 @@ class ImageLoader {
         }
 
         $bytes = self::resizedJPEG($image);
-        imagedestroy($image);
 
         return $bytes;
     }
@@ -149,7 +148,6 @@ class ImageLoader {
         ob_start();
         $written = imagejpeg($thumbnail, null, 85);
         $bytes = ob_get_clean();
-        imagedestroy($thumbnail);
 
         return $written && is_string($bytes) ? $bytes : null;
     }

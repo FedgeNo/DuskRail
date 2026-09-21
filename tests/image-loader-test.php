@@ -10,7 +10,6 @@ $source = imagecreatetruecolor(800, 400);
 ob_start();
 imagepng($source);
 $source_bytes = (string) ob_get_clean();
-imagedestroy($source);
 $thumbnail_bytes = ImageLoader::thumbnailBytes($source_bytes);
 $thumbnail_size = $thumbnail_bytes !== null ? getimagesizefromstring($thumbnail_bytes) : false;
 assert_same('large images become bounded JPEG thumbnails', [300, 150], $thumbnail_size !== false ? [$thumbnail_size[0], $thumbnail_size[1]] : null);
