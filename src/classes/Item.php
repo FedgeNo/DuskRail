@@ -347,7 +347,7 @@ SELECT `Items`.`itemId`, `Items`.`hostId`, `Items`.`claimedUntil`
         $select = mysqli_prepare(Database::connection(), '
 SELECT `itemId`, `url`, `hostId`, `type`, `title`, `description`, `keywords`,
         `crawledTime`, `noindex`, `contentHash`, `recrawlAfterSeconds`, `recrawlDueTime`,
-        `claimedUntil`, `inc`
+        `claimedUntil`, `crawlPriority`, `inc`
     FROM `Items`
     WHERE `itemId` = ?
     LIMIT 1
