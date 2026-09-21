@@ -89,6 +89,28 @@ DELETE FROM `DeadURLs`
         return false;
     }
 
+    /** Returns the current tombstone reason, or null when the URL is live. */
+    public static function reasonFor(string $url): ?string {
+        $connection = Database::connection();
+        $url = mb_substr($url, 0, self::MAX_URL_LENGTH);
+
+        $select = mysqli_prepare($connection, '
+SELECT `reason`, `deadTime`
+    FROM `DeadURLs`
+    WHERE `url` = ?
+    LIMIT 1
+');
+        mysqli_stmt_bind_param($select, 's', $url);
+        mysqli_stmt_execute($select);
+        $row = mysqli_fetch_assoc(mysqli_stmt_get_result($select));
+
+        if ($row === null || time() - (int) $row['deadTime'] >= self::MAX_AGE_SECONDS) {
+            return null;
+        }
+
+        return (string) $row['reason'];
+    }
+
     /**
      * Which of $urls are currently known-dead, as a url => true map. One
      * query for a whole page's discoveries instead of one per link: a page
