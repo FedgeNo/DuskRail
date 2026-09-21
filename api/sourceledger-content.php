@@ -56,7 +56,6 @@ if ($item -> crawledTime === null) {
 }
 
 $text = (string) ($item -> fullText ?? '');
-$html = (string) ($item -> decompressedFullHTML() ?? '');
 $maximum_characters = 120000;
 $capture_text = function_exists('mb_substr')
     ? mb_substr($text, 0, $maximum_characters)
@@ -70,5 +69,4 @@ echo json_encode([
     'crawledTime' => $item -> crawledTime,
     'text' => $capture_text,
     'textTruncated' => strlen($text) > strlen($capture_text),
-    'html' => $html,
 ]);
