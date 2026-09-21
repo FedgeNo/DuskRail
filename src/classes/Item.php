@@ -59,6 +59,7 @@ class Item {
     // written from here, only read.
     public ?int $recrawlDueTime = null;
     public ?int $claimedUntil = null;
+    public ?int $crawlPriority = null;
     public ?int $inc = null;
 
     /**
@@ -85,14 +86,47 @@ class Item {
         $item -> recrawlAfterSeconds = (int) $row['recrawlAfterSeconds'];
         $item -> recrawlDueTime = $row['recrawlDueTime'] !== null ? (int) $row['recrawlDueTime'] : null;
         $item -> claimedUntil = $row['claimedUntil'] !== null ? (int) $row['claimedUntil'] : null;
+        $item -> crawlPriority = (int) ($row['crawlPriority'] ?? 0);
         $item -> inc = (int) $row['inc'];
 
         return $item;
     }
 
     /**
-     * The next item for the crawler to fetch, picked in three priority
-     * classes (see selectCandidateRow()): never-crawled items first, then
+     * Enqueues an interactive retrieval that must precede ordinary crawling.
+     * URL validation and public DNS resolution happen before any row is
+     * created; the worker repeats its host and robots checks before fetching.
+     */
+    public static function enqueuePriority(URL $url): ?self {
+        if (!$url -> isValid() || !IPAddress::hostResolvesPublicly($url -> host)) {
+            return null;
+        }
+
+        DeadURL::forget($url -> toString());
+        $connection = Database::connection();
+        $host = Host::findOrCreateByName($url -> host);
+        $url_string = self::truncate($url -> toString(), self::MAX_URL_LENGTH);
+        $type = 'unknown';
+
+        $insert = mysqli_prepare($connection, '
+INSERT INTO `Items` (`url`, `hostId`, `type`, `crawlPriority`, `crawledTime`, `claimedUntil`, `inc`)
+    VALUES (?, ?, ?, 255, NULL, NULL, 0)
+    ON DUPLICATE KEY UPDATE
+        `itemId` = LAST_INSERT_ID(`itemId`),
+        `crawlPriority` = GREATEST(`crawlPriority`, 255),
+        `crawledTime` = NULL,
+        `claimedUntil` = NULL
+');
+        mysqli_stmt_bind_param($insert, 'sis', $url_string, $host -> hostId, $type);
+        mysqli_stmt_execute($insert);
+
+        return self::findById((int) mysqli_insert_id($connection));
+    }
+
+    /**
+     * The next item for the crawler to fetch, with interactive items first,
+     * then three ordinary priority classes (see selectCandidateRow()):
+     * never-crawled items first, then
      * recrawls whose wait has elapsed, most-overdue first, then stalled
      * claims last.
      *
@@ -106,12 +140,10 @@ class Item {
      * unrelated ones. Falls back to the default order for recrawls
      * (everything already crawled once) or when nothing is left unqueued.
      *
-     * Both queries also only consider items whose host is actually ready to
-     * be hit again (Hosts.nextCrawlTime NULL - never crawled - or already in
-     * the past) - politeness applies before anything else, focused crawl or
-     * not - and whose claim (see claim()) has either never been taken or has
-     * expired, so multiple concurrent crawler processes never hand the same
-     * item to two workers at once.
+     * Ordinary items only qualify when their host is ready to be hit again
+     * (Hosts.nextCrawlTime NULL - never crawled - or already in the past).
+     * Interactive items deliberately bypass that host cooldown for realtime
+     * retrieval, while every item still requires an available claim.
      *
      * A never-attempted item always comes ahead of one whose claim expired
      * without completing (crawledTime still NULL despite claimedUntil being
@@ -141,7 +173,7 @@ class Item {
             // The candidate query filters on the host being due, so the next
             // attempt can't pick the same host again; losing here just means
             // a concurrent worker is already crawling something else on it.
-            if (!Host::reserveById((int) $row['hostId'])) {
+            if ((int) ($row['crawlPriority'] ?? 0) === 0 && !Host::reserveById((int) $row['hostId'])) {
                 continue;
             }
 
@@ -192,11 +224,12 @@ class Item {
         // due host, one probe of the hostId_crawledTime_claimedUntil index
         // answers "any uncrawled, unclaimed item here?".
         $fresh = mysqli_query($connection, '
-SELECT `Items`.`itemId`, `Items`.`hostId`
+SELECT `Items`.`itemId`, `Items`.`hostId`, `Items`.`crawlPriority`
     FROM `Hosts`
     INNER JOIN `Items` ON `Items`.`hostId` = `Hosts`.`hostId` AND `Items`.`crawledTime` IS NULL
-    WHERE (`Hosts`.`nextCrawlTime` IS NULL OR `Hosts`.`nextCrawlTime` <= UNIX_TIMESTAMP())
+        WHERE (`Items`.`crawlPriority` > 0 OR `Hosts`.`nextCrawlTime` IS NULL OR `Hosts`.`nextCrawlTime` <= UNIX_TIMESTAMP())
         AND `Items`.`claimedUntil` IS NULL
+    ORDER BY `Items`.`crawlPriority` DESC, `Items`.`itemId` ASC
     LIMIT 1
 ');
         $row = $fresh !== false ? mysqli_fetch_assoc($fresh) : null;
@@ -212,12 +245,12 @@ SELECT `Items`.`itemId`, `Items`.`hostId`
         // them on every pick whenever none did. The index range reads only
         // rows that are actually due, already in due order.
         $recrawl = mysqli_query($connection, '
-SELECT STRAIGHT_JOIN `Items`.`itemId`, `Items`.`hostId`
+SELECT STRAIGHT_JOIN `Items`.`itemId`, `Items`.`hostId`, `Items`.`crawlPriority`
     FROM `Items` FORCE INDEX (`recrawlDueTime_claimedUntil_hostId`)
     INNER JOIN `Hosts` FORCE INDEX (`PRIMARY`) ON `Hosts`.`hostId` = `Items`.`hostId`
-    WHERE `Items`.`recrawlDueTime` <= UNIX_TIMESTAMP()
+        WHERE `Items`.`recrawlDueTime` <= UNIX_TIMESTAMP()
         AND (`Items`.`claimedUntil` IS NULL OR `Items`.`claimedUntil` <= UNIX_TIMESTAMP())
-        AND (`Hosts`.`nextCrawlTime` IS NULL OR `Hosts`.`nextCrawlTime` <= UNIX_TIMESTAMP())
+        AND (`Items`.`crawlPriority` > 0 OR `Hosts`.`nextCrawlTime` IS NULL OR `Hosts`.`nextCrawlTime` <= UNIX_TIMESTAMP())
     ORDER BY `Items`.`recrawlDueTime` ASC
     LIMIT 1
 ');
@@ -231,10 +264,10 @@ SELECT STRAIGHT_JOIN `Items`.`itemId`, `Items`.`hostId`
         // worker). Deliberately dead last: a URL that already ate one worker
         // shouldn't cut ahead of anything untried.
         $stalled = mysqli_query($connection, '
-SELECT `Items`.`itemId`, `Items`.`hostId`
+SELECT `Items`.`itemId`, `Items`.`hostId`, `Items`.`crawlPriority`
     FROM `Hosts`
     INNER JOIN `Items` ON `Items`.`hostId` = `Hosts`.`hostId` AND `Items`.`crawledTime` IS NULL
-    WHERE (`Hosts`.`nextCrawlTime` IS NULL OR `Hosts`.`nextCrawlTime` <= UNIX_TIMESTAMP())
+    WHERE (`Items`.`crawlPriority` > 0 OR `Hosts`.`nextCrawlTime` IS NULL OR `Hosts`.`nextCrawlTime` <= UNIX_TIMESTAMP())
         AND `Items`.`claimedUntil` IS NOT NULL
         AND `Items`.`claimedUntil` <= UNIX_TIMESTAMP()
     LIMIT 1
@@ -320,6 +353,24 @@ SELECT `itemId`, `url`, `hostId`, `type`, `title`, `description`, `keywords`,
     LIMIT 1
 ');
         mysqli_stmt_bind_param($select, 'i', $itemId);
+        mysqli_stmt_execute($select);
+        $row = mysqli_fetch_assoc(mysqli_stmt_get_result($select));
+
+        return $row !== null ? self::fromRow($row) : null;
+    }
+
+    /** Finds an item already stored for this canonical URL. */
+    public static function findByURL(URL $url): ?self {
+        $url_string = self::truncate($url -> toString(), self::MAX_URL_LENGTH);
+        $select = mysqli_prepare(Database::connection(), '
+SELECT `itemId`, `url`, `hostId`, `type`, `title`, `description`, `keywords`,
+        `crawledTime`, `noindex`, `contentHash`, `recrawlAfterSeconds`, `recrawlDueTime`,
+        `claimedUntil`, `inc`
+    FROM `Items`
+    WHERE `url` = ?
+    LIMIT 1
+');
+        mysqli_stmt_bind_param($select, 's', $url_string);
         mysqli_stmt_execute($select);
         $row = mysqli_fetch_assoc(mysqli_stmt_get_result($select));
 
@@ -702,7 +753,7 @@ UPDATE `Items`
         $update = mysqli_prepare($connection, '
 UPDATE `Items`
     SET `type` = ?, `title` = ?, `description` = ?, `keywords` = ?, `fullText` = ?, `fullHTML` = ?,
-        `crawledTime` = ?, `noindex` = ?, `contentHash` = ?, `recrawlAfterSeconds` = ?
+        `crawledTime` = ?, `noindex` = ?, `contentHash` = ?, `recrawlAfterSeconds` = ?, `crawlPriority` = 0
     WHERE `itemId` = ?
 ');
         $values = [$type, $title, $description, $keywords, $content -> fullText, $content -> fullHTML, $now, $noindex, $content -> contentHash, $recrawlAfterSeconds, $this -> itemId];
