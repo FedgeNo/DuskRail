@@ -380,7 +380,7 @@ for ($hop = 0; in_array($connection -> statusCode, REDIRECT_STATUS_CODES, true);
     // someone else. Same reservation as the original fetch - lose it and the
     // item waits rather than jumping that host's cooldown just because a
     // redirect pointed at it.
-    if (!$host -> reserve()) {
+    if (!$realtime && !$host -> reserve()) {
         echo 'The redirect target\'s host is already spoken for, leaving item for retry.
 ';
         exit(0);
