@@ -20,18 +20,13 @@ declare(strict_types=1);
 class HeadlessBrowser {
     private const HANDSHAKE_TIMEOUT_SECONDS = 3.0;
 
-    // Kept short deliberately - the total (this plus whatever the caller's
-    // own per-item budget already spent) must stay comfortably under
-    // bin/crawler-manager.php's hang-kill timeout, so a slow/stuck
-    // challenge fails this attempt on its own rather than costing the whole
-    // worker a hang strike.
+    // A navigation that never produces a loaded challenge document should
+    // fail promptly; the challenge's own verification window follows.
     private const NAVIGATION_TIMEOUT_SECONDS = 10.0;
 
-    // Extra grace period after load, folded into NAVIGATION_TIMEOUT_SECONDS
-    // above rather than added on top of it - plenty of challenge scripts run
-    // their verification round trip and auto-reload a few seconds after the
-    // interstitial's own load event, not before it.
-    private const SETTLE_SECONDS = 4.0;
+    // The challenge itself gets up to thirty seconds after its document has
+    // loaded to complete verification, reload, or redirect.
+    private const SETTLE_SECONDS = 30.0;
 
     private const EVALUATE_TIMEOUT_SECONDS = 3.0;
 
@@ -130,11 +125,11 @@ class HeadlessBrowser {
 
         $mainDocumentFulfilled = false;
         $loadEventFired = false;
-        $settleDeadline = null;
-        $overallDeadline = microtime(true) + self::NAVIGATION_TIMEOUT_SECONDS;
+        $settle_deadline = null;
+        $navigation_deadline = microtime(true) + self::NAVIGATION_TIMEOUT_SECONDS;
 
         while (true) {
-            $deadline = $settleDeadline !== null ? min($overallDeadline, $settleDeadline) : $overallDeadline;
+            $deadline = $settle_deadline ?? $navigation_deadline;
             $message = $tab -> receiveMessage($deadline);
 
             if ($message === null) {
@@ -148,10 +143,10 @@ class HeadlessBrowser {
 
             if (($message['method'] ?? null) === 'Page.loadEventFired' && !$loadEventFired) {
                 $loadEventFired = true;
-                $settleDeadline = microtime(true) + self::SETTLE_SECONDS;
+                $settle_deadline = microtime(true) + self::SETTLE_SECONDS;
             }
 
-            if ($settleDeadline !== null && microtime(true) >= $settleDeadline) {
+            if ($settle_deadline !== null && microtime(true) >= $settle_deadline) {
                 break;
             }
         }
