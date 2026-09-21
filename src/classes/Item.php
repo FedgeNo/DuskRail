@@ -892,6 +892,16 @@ SELECT `itemId`, `url`, `hostId`, `type`, `title`, `description`, `keywords`,
             // signal, and Link::create() refuses them for the same reason.
             $survivorId = (int) $row['itemId'];
 
+            $redirect = mysqli_prepare($connection, '
+INSERT INTO `SourceLedgerRedirects` (`sourceItemId`, `targetItemId`, `sourceURL`, `createdTime`)
+    VALUES (?, ?, ?, ?)
+    ON DUPLICATE KEY UPDATE `targetItemId` = VALUES(`targetItemId`), `sourceURL` = VALUES(`sourceURL`), `createdTime` = VALUES(`createdTime`)
+');
+            $sourceUrl = (string) $this -> url;
+            $createdTime = time();
+            mysqli_stmt_bind_param($redirect, 'iisi', $this -> itemId, $survivorId, $sourceUrl, $createdTime);
+            mysqli_stmt_execute($redirect);
+
             $moveInbound = mysqli_prepare($connection, '
 INSERT IGNORE INTO `Links` (`parentId`, `childId`, `description`)
     SELECT `parentId`, ?, `description`

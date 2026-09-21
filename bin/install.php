@@ -1324,6 +1324,43 @@ END
 SQL);
             },
         ],
+        [
+            'name' => 'add_crawl_priority_to_items',
+            'check' => fn () => column_exists('Items', 'crawlPriority') && index_exists('Items', 'crawlPriority_crawledTime_claimedUntil'),
+            'apply' => function (): void {
+                run_sql('
+ALTER TABLE `Items`
+    ADD COLUMN `crawlPriority` tinyint(3) unsigned NOT NULL DEFAULT 0 AFTER `claimedUntil`,
+    ADD KEY `crawlPriority_crawledTime_claimedUntil` (`crawlPriority`, `crawledTime`, `claimedUntil`, `hostId`)
+');
+            },
+        ],
+        [
+            'name' => 'add_crawl_priority_item_id_index',
+            'check' => fn () => index_exists('Items', 'crawlPriority_itemId'),
+            'apply' => function (): void {
+                run_sql('
+ALTER TABLE `Items`
+    ADD KEY `crawlPriority_itemId` (`crawlPriority`, `itemId`)
+');
+            },
+        ],
+        [
+            'name' => 'create_sourceledger_redirects',
+            'check' => fn () => table_exists('SourceLedgerRedirects'),
+            'apply' => function (): void {
+                run_sql('
+CREATE TABLE `SourceLedgerRedirects` (
+  `sourceItemId` int(10) unsigned NOT NULL,
+  `targetItemId` int(10) unsigned NOT NULL,
+  `sourceURL` varchar(767) NOT NULL,
+  `createdTime` int(10) unsigned NOT NULL,
+  PRIMARY KEY (`sourceItemId`),
+  KEY `targetItemId` (`targetItemId`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+');
+            },
+        ],
     ];
 }
 

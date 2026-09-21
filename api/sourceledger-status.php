@@ -29,6 +29,21 @@ if ($item_id <= 0) {
 
 $item = Item::findById($item_id);
 if ($item === null) {
+    $redirect = mysqli_prepare(Database::connection(), '
+SELECT `targetItemId`
+    FROM `SourceLedgerRedirects`
+    WHERE `sourceItemId` = ?
+    LIMIT 1
+');
+    mysqli_stmt_bind_param($redirect, 'i', $item_id);
+    mysqli_stmt_execute($redirect);
+    $redirect_row = mysqli_fetch_assoc(mysqli_stmt_get_result($redirect));
+    if ($redirect_row !== null) {
+        $item = Item::findById((int) $redirect_row['targetItemId']);
+    }
+}
+
+if ($item === null) {
     $url = isset($_GET['url']) ? (string) $_GET['url'] : '';
     $reason = $url !== '' ? DeadURL::reasonFor($url) : null;
     http_response_code(404);

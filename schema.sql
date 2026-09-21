@@ -38,13 +38,25 @@ CREATE TABLE `Items` (
   `recrawlAfterSeconds` int(10) unsigned NOT NULL DEFAULT 604800,
   `recrawlDueTime` int(10) unsigned GENERATED ALWAYS AS (`crawledTime` + `recrawlAfterSeconds`) STORED,
   `claimedUntil` int(10) unsigned DEFAULT NULL,
+  `crawlPriority` tinyint(3) unsigned NOT NULL DEFAULT 0,
   `inc` int(10) unsigned NOT NULL DEFAULT 1,
   PRIMARY KEY (`itemId`),
   UNIQUE KEY `url` (`url`),
   KEY `hostId_crawledTime_claimedUntil` (`hostId`,`crawledTime`,`claimedUntil`),
   KEY `crawledTime_itemId_type_noindex` (`crawledTime`,`itemId`,`type`,`noindex`),
   KEY `recrawlDueTime_claimedUntil_hostId` (`recrawlDueTime`,`claimedUntil`,`hostId`),
+  KEY `crawlPriority_crawledTime_claimedUntil` (`crawlPriority`,`crawledTime`,`claimedUntil`,`hostId`),
+  KEY `crawlPriority_itemId` (`crawlPriority`,`itemId`),
   CONSTRAINT `Items_ibfk_1` FOREIGN KEY (`hostId`) REFERENCES `Hosts` (`hostId`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE `SourceLedgerRedirects` (
+  `sourceItemId` int(10) unsigned NOT NULL,
+  `targetItemId` int(10) unsigned NOT NULL,
+  `sourceURL` varchar(767) NOT NULL,
+  `createdTime` int(10) unsigned NOT NULL,
+  PRIMARY KEY (`sourceItemId`),
+  KEY `targetItemId` (`targetItemId`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Revision of the last complete link-metadata refresh, populated lazily.
