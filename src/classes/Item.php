@@ -359,24 +359,6 @@ SELECT `itemId`, `url`, `hostId`, `type`, `title`, `description`, `keywords`,
         return $row !== null ? self::fromRow($row) : null;
     }
 
-    /** Finds an item already stored for this canonical URL. */
-    public static function findByURL(URL $url): ?self {
-        $url_string = self::truncate($url -> toString(), self::MAX_URL_LENGTH);
-        $select = mysqli_prepare(Database::connection(), '
-SELECT `itemId`, `url`, `hostId`, `type`, `title`, `description`, `keywords`,
-        `crawledTime`, `noindex`, `contentHash`, `recrawlAfterSeconds`, `recrawlDueTime`,
-        `claimedUntil`, `inc`
-    FROM `Items`
-    WHERE `url` = ?
-    LIMIT 1
-');
-        mysqli_stmt_bind_param($select, 's', $url_string);
-        mysqli_stmt_execute($select);
-        $row = mysqli_fetch_assoc(mysqli_stmt_get_result($select));
-
-        return $row !== null ? self::fromRow($row) : null;
-    }
-
     /**
      * findById() plus the stored page content, for the one caller that
      * genuinely re-reads it (bin/reextract-text.php).

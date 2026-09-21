@@ -34,10 +34,7 @@ if (!$url -> isValid()) {
     exit;
 }
 
-$item = Item::findByURL($url);
-if ($item === null || $item -> crawledTime === null) {
-    $item = Item::enqueuePriority($url);
-}
+$item = Item::enqueuePriority($url);
 
 if ($item === null) {
     http_response_code(422);
