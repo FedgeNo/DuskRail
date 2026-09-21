@@ -179,8 +179,10 @@ class ChromeConnection {
 
         $contentLength = isset($this -> headers['content-length']) ? (int) $this -> headers['content-length'] : null;
         $isSuccess = $this -> statusCode >= 200 && $this -> statusCode < 300;
+        $isChallenge = $this -> statusCode === 403
+            && strtolower((string) ($this -> headers['cf-mitigated'] ?? '')) === 'challenge';
 
-        if ($isSuccess && ($contentLength === null || $contentLength <= self::MAX_BODY_SIZE)) {
+        if (($isSuccess || $isChallenge) && ($contentLength === null || $contentLength <= self::MAX_BODY_SIZE)) {
             $pendingRequestId = $params['requestId'];
             $bodyRequestId = $tab -> sendCommand('Fetch.getResponseBody', ['requestId' => $params['requestId']]);
 

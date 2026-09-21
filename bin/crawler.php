@@ -30,15 +30,16 @@ const PDF_EXTRACT_TIMEOUT_SECONDS = 20;
 const PDF_EXTRACT_STALE_SECONDS = 3600;
 
 /**
- * Every actual request made (each redirect hop, and the final fetch) counts
- * toward that host's politeness cooldown, not just the one that happened to
- * return real content. $statusCode is null when the connection itself never
- * completed (DNS failure, connection refused, TLS handshake failure, ...) -
- * treated as an ordinary (non-rate-limited) attempt for cooldown purposes,
- * same as any other single failed request.
+ * Every actual ordinary request made (each redirect hop, and the final fetch)
+ * counts toward that host's politeness cooldown. Interactive SourceLedger
+ * requests deliberately skip that cooldown for realtime work. $statusCode is
+ * null when the connection itself never completed (DNS failure, connection
+ * refused, TLS handshake failure, ...).
  */
-function recordHostCrawl(Host $host, ?int $statusCode): void {
-    $host -> recordCrawl($statusCode !== null && in_array($statusCode, RATE_LIMITED_STATUS_CODES, true));
+function recordHostCrawl(Host $host, ?int $statusCode, bool $realtime): void {
+    if (!$realtime) {
+        $host -> recordCrawl($statusCode !== null && in_array($statusCode, RATE_LIMITED_STATUS_CODES, true));
+    }
 }
 
 /**
@@ -55,14 +56,14 @@ function recordHostCrawl(Host $host, ?int $statusCode): void {
  * itself a request to the host - by the time there's a verdict to check, the
  * request the check exists to prevent has already gone out.
  */
-function hostFor(URL $url, string $chromeEndpoint): ?Host {
+function hostFor(URL $url, string $chromeEndpoint, bool $realtime): ?Host {
     $host = Host::findOrCreateByName($url -> host);
 
     if (!$host -> isPubliclyRoutable()) {
         return null;
     }
 
-    if ($host -> fetchRobotsTxtIfStale($url -> scheme, $chromeEndpoint) && $host -> robotsTxt !== null && $host -> robotsTxt !== '') {
+    if ($host -> fetchRobotsTxtIfStale($url -> scheme, $chromeEndpoint, $realtime) && $host -> robotsTxt !== null && $host -> robotsTxt !== '') {
         $queued = Sitemap::ingestFor($host, $host -> robotsTxt);
 
         if ($queued > 0) {
@@ -206,7 +207,8 @@ echo 'Next up: ' . $item -> url . ' (itemId ' . $item -> itemId . ')
 file_put_contents($currentItemFile, (string) $item -> itemId);
 
 $pageURL = new URL($item -> url);
-$host = hostFor($pageURL, $chromeEndpoint);
+$realtime = (int) ($item -> crawlPriority ?? 0) > 0;
+$host = hostFor($pageURL, $chromeEndpoint, $realtime);
 
 if ($host === null) {
     $item -> delete('private-address');
@@ -255,7 +257,7 @@ try {
     exit(0);
 }
 
-recordHostCrawl($host, $connection -> statusCode);
+recordHostCrawl($host, $connection -> statusCode, $realtime);
 
 if ($connection -> statusCode === null) {
     // The connection itself never completed (DNS failure, connection
@@ -265,8 +267,10 @@ if ($connection -> statusCode === null) {
     // escalating schedule instead. A host that's really gone decays to one
     // connection attempt a week; one that was momentarily unreachable is
     // back in rotation in minutes, with nothing deleted over the blip.
-    $host -> recordFailure();
-    echo 'Connection failed (' . $host -> consecutiveFailures . ' in a row on this host), backing the host off, item left for retry.
+    if (!$realtime) {
+        $host -> recordFailure();
+    }
+    echo 'Connection failed (' . $host -> consecutiveFailures . ' in a row on this host), ' . ($realtime ? 'interactive retry remains eligible' : 'backing the host off') . ', item left for retry.
 ';
     exit(0);
 }
@@ -343,7 +347,8 @@ for ($hop = 0; in_array($connection -> statusCode, REDIRECT_STATUS_CODES, true);
     file_put_contents($currentItemFile, (string) $item -> itemId);
 
     $pageURL = new URL($item -> url);
-    $host = hostFor($pageURL, $chromeEndpoint);
+    $realtime = (int) ($item -> crawlPriority ?? 0) > 0;
+    $host = hostFor($pageURL, $chromeEndpoint, $realtime);
 
     // A redirect is the most direct way to aim this crawler at an address it
     // would never have followed a link to: the URL that was checked and the
@@ -389,11 +394,13 @@ for ($hop = 0; in_array($connection -> statusCode, REDIRECT_STATUS_CODES, true);
         exit(0);
     }
 
-    recordHostCrawl($host, $connection -> statusCode);
+    recordHostCrawl($host, $connection -> statusCode, $realtime);
 
     if ($connection -> statusCode === null) {
-        $host -> recordFailure();
-        echo 'Connection failed (' . $host -> consecutiveFailures . ' in a row on this host), backing the host off, item left for retry.
+        if (!$realtime) {
+            $host -> recordFailure();
+        }
+        echo 'Connection failed (' . $host -> consecutiveFailures . ' in a row on this host), ' . ($realtime ? 'interactive retry remains eligible' : 'backing the host off') . ', item left for retry.
 ';
         exit(0);
     }
@@ -411,7 +418,25 @@ if (in_array($connection -> statusCode, RATE_LIMITED_STATUS_CODES, true)) {
     exit(0);
 }
 
-if ($connection -> statusCode < 200 || $connection -> statusCode >= 300) {
+$challenge_html = null;
+
+if ($connection -> statusCode === 403
+    && strtolower((string) ($connection -> headers['cf-mitigated'] ?? '')) === 'challenge'
+) {
+    $candidate_html = $connection -> readBody();
+    $candidate_content_type = $connection -> contentType();
+
+    if ($candidate_content_type !== null && $candidate_content_type -> isHTML()) {
+        $candidate_document = HTMLLoader::load($candidate_html, $candidate_content_type -> charset);
+        $candidate_metadata = HTMLLoader::extractMetadata($candidate_document);
+
+        if (in_array($candidate_metadata['title'], JS_CHALLENGE_TITLES, true)) {
+            $challenge_html = $candidate_html;
+        }
+    }
+}
+
+if (($connection -> statusCode < 200 || $connection -> statusCode >= 300) && $challenge_html === null) {
     // A 404, 500, 403, ... never has real content behind it worth keeping -
     // whatever body an error page returns isn't presentable, and there's
     // nothing to retry here (the URL is what it is), so this is exactly the
@@ -503,7 +528,7 @@ if ($contentType === null || !$contentType -> isHTML()) {
     exit(0);
 }
 
-$html = $connection -> readBody();
+$html = $challenge_html ?? $connection -> readBody();
 $document = HTMLLoader::load($html, $contentType -> charset);
 $baseURL = HTMLLoader::baseURL($document, $pageURL);
 HTMLLoader::separateBlockElements($document);
@@ -526,6 +551,7 @@ if (in_array($metadata['title'], JS_CHALLENGE_TITLES, true)) {
         $resolvedMetadata = HTMLLoader::extractMetadata($resolvedDocument);
 
         if (!in_array($resolvedMetadata['title'], JS_CHALLENGE_TITLES, true)) {
+            $connection -> statusCode = 200;
             $html = $resolvedHTML;
             $document = $resolvedDocument;
             $baseURL = HTMLLoader::baseURL($document, $pageURL);
