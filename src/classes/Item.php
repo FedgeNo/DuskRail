@@ -228,7 +228,8 @@ SELECT `Items`.`itemId`, `Items`.`hostId`, `Items`.`crawlPriority`
     FROM `Hosts`
     INNER JOIN `Items` ON `Items`.`hostId` = `Hosts`.`hostId` AND `Items`.`crawledTime` IS NULL
         WHERE (`Items`.`crawlPriority` > 0 OR `Hosts`.`nextCrawlTime` IS NULL OR `Hosts`.`nextCrawlTime` <= UNIX_TIMESTAMP())
-        AND `Items`.`claimedUntil` IS NULL
+        AND (`Items`.`claimedUntil` IS NULL
+            OR (`Items`.`crawlPriority` > 0 AND `Items`.`claimedUntil` <= UNIX_TIMESTAMP()))
     ORDER BY `Items`.`crawlPriority` DESC, `Items`.`itemId` ASC
     LIMIT 1
 ');
