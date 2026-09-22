@@ -292,8 +292,13 @@ if (!ensure_current_chrome_generation($chromeInstances, $chromeGeneration, $last
 
 $announcedShutdown = false;
 $lastHeartbeatAt = 0.0;
+$lastInteractiveExpiryAt = 0.0;
 
 while (true) {
+    if (microtime(true) - $lastInteractiveExpiryAt >= 1.0) {
+        $lastInteractiveExpiryAt = microtime(true);
+        InteractiveRetrieval::expire();
+    }
     if (microtime(true) - $lastHeartbeatAt >= HEARTBEAT_INTERVAL_SECONDS) {
         $lastHeartbeatAt = microtime(true);
         Setting::store(CRAWLER_HEARTBEAT_SETTING, (string) time());

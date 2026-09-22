@@ -50,6 +50,15 @@ CREATE TABLE `Items` (
   CONSTRAINT `Items_ibfk_1` FOREIGN KEY (`hostId`) REFERENCES `Hosts` (`hostId`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+CREATE TABLE `InteractiveRetrievals` (
+  `requestItemId` int(10) unsigned NOT NULL,
+  `itemId` int(10) unsigned NOT NULL,
+  `deadline` int(10) unsigned NOT NULL,
+  `failure` varchar(255) DEFAULT NULL,
+  PRIMARY KEY (`requestItemId`),
+  KEY `itemId` (`itemId`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 CREATE TABLE `SourceLedgerRedirects` (
   `sourceItemId` int(10) unsigned NOT NULL,
   `targetItemId` int(10) unsigned NOT NULL,

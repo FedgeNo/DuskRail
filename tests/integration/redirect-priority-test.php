@@ -47,6 +47,7 @@ function fixture(string $path, int $priority): Item {
 }
 
 $source = fixture('source', 255);
+$request = InteractiveRetrieval::start($source);
 $target = fixture('target', 0);
 $survivor = $source -> redirectTo(new URL($target -> url));
 check('merge uses existing target', $target -> itemId, $survivor -> itemId);
@@ -61,6 +62,8 @@ check('integration alias points at survivor', $target -> itemId, (int) $redirect
 $next = fixture('next', 0);
 $survivor = $survivor -> redirectTo(new URL($next -> url));
 check('priority survives another merge', 255, $survivor -> crawlPriority);
+check('deadline survives redirect merges', $request -> deadline, InteractiveRetrieval::find($source -> itemId) -> deadline);
+check('deadline follows the surviving item', $next -> itemId, InteractiveRetrieval::find($source -> itemId) -> itemId);
 $redirect -> execute();
 check('original alias survives multiple merges', $next -> itemId, (int) $redirect -> get_result() -> fetch_row()[0]);
 
@@ -72,3 +75,21 @@ $ordinary_target = fixture('ordinary-target', 0);
 check('ordinary redirects remain ordinary', 0, $ordinary -> redirectTo(new URL($ordinary_target -> url)) -> crawlPriority);
 $fresh = fixture('fresh', 255);
 check('same-row redirect keeps priority', 255, $fresh -> redirectTo(new URL('https://redirect.example/new-path')) -> crawlPriority);
+
+InteractiveRetrieval::workerFinished($request -> requestItemId, $request -> deadline, 'HTTP 429');
+check('failure is recorded for caller', 'HTTP 429', InteractiveRetrieval::find($source -> itemId) -> failure);
+check('failed request returns to ordinary priority', 0, Item::findById($next -> itemId) -> crawlPriority);
+check('failed URL remains stored', $next -> url, Item::findById($next -> itemId) -> url);
+check('failure does not tombstone URL', null, DeadURL::reasonFor($next -> url));
+$new_request = InteractiveRetrieval::start($next);
+check('explicit new request has no old failure', null, $new_request -> failure);
+
+$expired = fixture('expired', 255);
+$expired_request = InteractiveRetrieval::start($expired);
+$stmt = $connection -> prepare('UPDATE InteractiveRetrievals SET deadline = UNIX_TIMESTAMP() - 1 WHERE requestItemId = ?');
+$stmt -> bind_param('i', $expired -> itemId);
+$stmt -> execute();
+InteractiveRetrieval::expire();
+check('expiry clears interactive priority', 0, Item::findById($expired -> itemId) -> crawlPriority);
+check('expiry records a failure', true, InteractiveRetrieval::find($expired -> itemId) -> failure !== null);
+check('expiry preserves URL', $expired -> url, Item::findById($expired -> itemId) -> url);

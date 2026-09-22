@@ -208,6 +208,20 @@ file_put_contents($currentItemFile, (string) $item -> itemId);
 
 $pageURL = new URL($item -> url);
 $realtime = (int) ($item -> crawlPriority ?? 0) > 0;
+$interactive_request = $realtime ? InteractiveRetrieval::activeForItem($item -> itemId) : null;
+$interactive_failure = 'The interactive retrieval attempt could not complete; it will not wait for a crawler retry.';
+$interactive_handoff = false;
+if ($interactive_request !== null) {
+    register_shutdown_function(static function () use ($interactive_request, &$interactive_failure, &$interactive_handoff): void {
+        if (!$interactive_handoff) {
+            InteractiveRetrieval::workerFinished($interactive_request -> requestItemId, $interactive_request -> deadline, $interactive_failure);
+        }
+    });
+    if (time() >= $interactive_request -> deadline) {
+        $interactive_failure = 'Interactive retrieval exceeded its 60-second deadline.';
+        exit(0);
+    }
+}
 $host = hostFor($pageURL, $chromeEndpoint, $realtime);
 
 if ($host === null) {
@@ -334,6 +348,7 @@ for ($hop = 0; in_array($connection -> statusCode, REDIRECT_STATUS_CODES, true);
     // URL was new, so the itemId is unchanged) still holds its original claim
     // and must NOT re-claim - claim() would fail against its own live claim.
     if ($item -> itemId !== $previousItemId && !$item -> reclaim()) {
+        $interactive_handoff = true;
         echo 'Redirect target already claimed by another worker, leaving it to them.
 ';
         exit(0);
@@ -407,6 +422,11 @@ for ($hop = 0; in_array($connection -> statusCode, REDIRECT_STATUS_CODES, true);
 }
 
 if (in_array($connection -> statusCode, RATE_LIMITED_STATUS_CODES, true)) {
+    if ($realtime) {
+        $interactive_failure = 'The source returned HTTP ' . $connection -> statusCode . '; interactive retrieval will not wait for a cooldown.';
+        echo $interactive_failure . PHP_EOL;
+        exit(0);
+    }
     // The server explicitly asked to be left alone, not "this doesn't
     // exist" - recordHostCrawl() above already backed this host off 5
     // minutes. The item itself is left alone (crawledTime still NULL) so

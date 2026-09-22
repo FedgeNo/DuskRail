@@ -120,7 +120,9 @@ INSERT INTO `Items` (`url`, `hostId`, `type`, `crawlPriority`, `crawledTime`, `c
         mysqli_stmt_bind_param($insert, 'sis', $url_string, $host -> hostId, $type);
         mysqli_stmt_execute($insert);
 
-        return self::findById((int) mysqli_insert_id($connection));
+        $item = self::findById((int) mysqli_insert_id($connection));
+        InteractiveRetrieval::start($item);
+        return $item;
     }
 
     /**
@@ -907,6 +909,7 @@ SELECT `itemId`, `url`, `hostId`, `type`, `title`, `description`, `keywords`,
             // or vice versa) are skipped - a page endorsing itself isn't a
             // signal, and Link::create() refuses them for the same reason.
             $survivorId = (int) $row['itemId'];
+            InteractiveRetrieval::redirect($this -> itemId, $survivorId);
 
             // Keep earlier SourceLedger IDs resolvable across multiple merges.
             $aliases = mysqli_prepare($connection, '

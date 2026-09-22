@@ -1346,6 +1346,22 @@ ALTER TABLE `Items`
             },
         ],
         [
+            'name' => 'create_interactive_retrievals',
+            'check' => fn () => table_exists('InteractiveRetrievals'),
+            'apply' => function (): void {
+                run_sql('
+CREATE TABLE `InteractiveRetrievals` (
+  `requestItemId` int(10) unsigned NOT NULL,
+  `itemId` int(10) unsigned NOT NULL,
+  `deadline` int(10) unsigned NOT NULL,
+  `failure` varchar(255) DEFAULT NULL,
+  PRIMARY KEY (`requestItemId`),
+  KEY `itemId` (`itemId`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+');
+            },
+        ],
+        [
             'name' => 'create_sourceledger_redirects',
             'check' => fn () => table_exists('SourceLedgerRedirects'),
             'apply' => function (): void {

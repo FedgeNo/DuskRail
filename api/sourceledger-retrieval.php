@@ -47,4 +47,5 @@ echo json_encode([
     'itemId' => $item -> itemId,
     'url' => $item -> url,
     'priority' => 'interactive',
+    'deadline' => InteractiveRetrieval::find($item -> itemId) -> deadline,
 ]);

@@ -27,7 +27,16 @@ if ($item_id <= 0) {
     return;
 }
 
-$item = Item::findById($item_id);
+$request = InteractiveRetrieval::find($item_id);
+$item = Item::findById($request -> itemId ?? $item_id);
+if ($request !== null && $request -> state($item, time()) === 'failed') {
+    $reason = $request -> failure ?? (time() >= $request -> deadline
+        ? 'Interactive retrieval exceeded its 60-second deadline.'
+        : 'The requested page is unavailable.');
+    $request -> fail($reason);
+    echo json_encode(['itemId' => $request -> itemId, 'url' => $item -> url ?? (string) ($_GET['url'] ?? ''), 'state' => 'failed', 'reason' => $reason]);
+    return;
+}
 if ($item === null) {
     $redirect = mysqli_prepare(Database::connection(), '
 SELECT `targetItemId`
