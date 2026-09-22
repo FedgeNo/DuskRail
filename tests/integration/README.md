@@ -13,6 +13,11 @@ Run `php tests/integration/optimization-test.php /tmp/duskrail-optimization-test
 
 The dependency-free suites run separately:
 
+`php tests/integration/redirect-priority-test.php /tmp/duskrail-optimization-tests.XXXXXX`
+requires only the disposable MariaDB instance. It checks priority transfer and
+SourceLedger aliases across redirect merges, with search and thumbnail side
+effects stubbed so application services and files remain untouched.
+
 ```sh
 php bin/test.php
 node tests/search-grid-test.js

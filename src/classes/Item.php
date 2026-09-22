@@ -856,14 +856,29 @@ UPDATE `Items`
             SearchIndexQueue::record([$this -> itemId], false, true);
 
             return $this;
-        } catch (\mysqli_sql_exception) {
+        } catch (\mysqli_sql_exception $exception) {
+            if ($exception -> getCode() !== 1062) {
+                throw $exception;
+            }
+
+            // The surviving row owns the remaining retrieval, including any
+            // retry after this worker exits. Persist priority before hydration.
+            $priority = (int) $this -> crawlPriority;
+            $promote = mysqli_prepare($connection, '
+UPDATE `Items`
+    SET `crawlPriority` = GREATEST(`crawlPriority`, ?)
+    WHERE `url` = ?
+');
+            mysqli_stmt_bind_param($promote, 'is', $priority, $newURLString);
+            mysqli_stmt_execute($promote);
+
             // Without the page content: the survivor is either about to be
             // crawled and overwritten, or reported as already crawled and
             // dropped. Neither reads what it currently stores.
             $select = mysqli_prepare($connection, '
 SELECT `itemId`, `url`, `hostId`, `type`, `title`, `description`, `keywords`,
         `crawledTime`, `noindex`, `contentHash`, `recrawlAfterSeconds`, `recrawlDueTime`,
-        `claimedUntil`, `inc`
+        `claimedUntil`, `crawlPriority`, `inc`
     FROM `Items`
     WHERE `url` = ?
     LIMIT 1
@@ -892,6 +907,15 @@ SELECT `itemId`, `url`, `hostId`, `type`, `title`, `description`, `keywords`,
             // or vice versa) are skipped - a page endorsing itself isn't a
             // signal, and Link::create() refuses them for the same reason.
             $survivorId = (int) $row['itemId'];
+
+            // Keep earlier SourceLedger IDs resolvable across multiple merges.
+            $aliases = mysqli_prepare($connection, '
+UPDATE `SourceLedgerRedirects`
+    SET `targetItemId` = ?
+    WHERE `targetItemId` = ?
+');
+            mysqli_stmt_bind_param($aliases, 'ii', $survivorId, $this -> itemId);
+            mysqli_stmt_execute($aliases);
 
             if ($this -> crawlPriority === 255) {
                 $redirect = mysqli_prepare($connection, '
