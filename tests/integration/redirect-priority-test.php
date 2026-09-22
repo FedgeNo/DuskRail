@@ -93,3 +93,17 @@ InteractiveRetrieval::expire();
 check('expiry clears interactive priority', 0, Item::findById($expired -> itemId) -> crawlPriority);
 check('expiry records a failure', true, InteractiveRetrieval::find($expired -> itemId) -> failure !== null);
 check('expiry preserves URL', $expired -> url, Item::findById($expired -> itemId) -> url);
+
+Setting::store(SOURCELEDGER_ONLY_SETTING, '1');
+check('restricted queue ignores ordinary and orphaned priority rows', null, Item::nextToCrawl('focused topic'));
+$interactive = fixture('active-interactive', 255);
+InteractiveRetrieval::start($interactive);
+check('restricted queue accepts active SourceLedger retrieval', $interactive -> itemId, Item::nextToCrawl('focused topic') -> itemId);
+check('restricted queue does not reclaim running retrieval', null, Item::nextToCrawl());
+$overdue = fixture('unprocessed-expiry', 255);
+InteractiveRetrieval::start($overdue);
+$stmt -> bind_param('i', $overdue -> itemId);
+$stmt -> execute();
+check('restricted queue excludes expired requests before cleanup', null, Item::nextToCrawl());
+Setting::store(SOURCELEDGER_ONLY_SETTING, '0');
+check('ordinary queue can resume', true, Item::nextToCrawl() !== null);

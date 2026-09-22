@@ -63,7 +63,9 @@ function hostFor(URL $url, string $chromeEndpoint, bool $realtime): ?Host {
         return null;
     }
 
-    if ($host -> fetchRobotsTxtIfStale($url -> scheme, $chromeEndpoint, $realtime) && $host -> robotsTxt !== null && $host -> robotsTxt !== '') {
+    if ($host -> fetchRobotsTxtIfStale($url -> scheme, $chromeEndpoint, $realtime)
+        && Setting::value(SOURCELEDGER_ONLY_SETTING) !== '1'
+        && $host -> robotsTxt !== null && $host -> robotsTxt !== '') {
         $queued = Sitemap::ingestFor($host, $host -> robotsTxt);
 
         if ($queued > 0) {

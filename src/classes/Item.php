@@ -214,6 +214,26 @@ INSERT INTO `Items` (`url`, `hostId`, `type`, `crawlPriority`, `crawledTime`, `c
     private static function selectCandidateRow(?string $topic): ?array {
         $connection = Database::connection();
 
+        if (Setting::value(SOURCELEDGER_ONLY_SETTING) === '1') {
+            $interactive = mysqli_query($connection, '
+SELECT `Items`.`itemId`, `Items`.`hostId`, `Items`.`crawlPriority`
+    FROM `Items` FORCE INDEX (`crawlPriority_itemId`)
+    WHERE `Items`.`crawlPriority` = 255
+        AND `Items`.`crawledTime` IS NULL
+        AND (`Items`.`claimedUntil` IS NULL OR `Items`.`claimedUntil` <= UNIX_TIMESTAMP())
+        AND EXISTS (
+            SELECT 1 FROM `InteractiveRetrievals`
+                WHERE `InteractiveRetrievals`.`itemId` = `Items`.`itemId`
+                    AND `InteractiveRetrievals`.`failure` IS NULL
+                    AND `InteractiveRetrievals`.`deadline` > UNIX_TIMESTAMP()
+        )
+    ORDER BY `Items`.`itemId` ASC
+    LIMIT 1
+');
+
+            return mysqli_fetch_assoc($interactive) ?: null;
+        }
+
         if ($topic !== null && trim($topic) !== '') {
             $row = self::selectFocusedCandidateRow($topic);
 

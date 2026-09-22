@@ -30,6 +30,9 @@ define('CHROME_DEVTOOLS_ENDPOINT_FILE', VAR_DIR . '/chrome-devtools-endpoint');
 // read by bin/crawler.php at the start of each run.
 define('CRAWL_TOPIC_SETTING', 'crawlTopic');
 
+// Restrict queue selection to active SourceLedger interactive requests.
+define('SOURCELEDGER_ONLY_SETTING', 'sourceLedgerOnly');
+
 // When bin/crawler-manager.php last confirmed it was alive (Setting, a unix
 // timestamp refreshed every few seconds while it runs) - how the watch page
 // can say "the crawler is running" without any way to see the process.
