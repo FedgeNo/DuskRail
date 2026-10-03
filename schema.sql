@@ -47,6 +47,7 @@ CREATE TABLE `Items` (
   KEY `recrawlDueTime_claimedUntil_hostId` (`recrawlDueTime`,`claimedUntil`,`hostId`),
   KEY `crawlPriority_crawledTime_claimedUntil` (`crawlPriority`,`crawledTime`,`claimedUntil`,`hostId`),
   KEY `crawlPriority_itemId` (`crawlPriority`,`itemId`),
+  KEY `crawledTime_crawlPriority_itemId_claimedUntil_hostId` (`crawledTime`,`crawlPriority` DESC,`itemId` ASC,`claimedUntil`,`hostId`),
   CONSTRAINT `Items_ibfk_1` FOREIGN KEY (`hostId`) REFERENCES `Hosts` (`hostId`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 

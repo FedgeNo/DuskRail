@@ -1346,6 +1346,17 @@ ALTER TABLE `Items`
             },
         ],
         [
+            'name' => 'add_fresh_crawl_candidate_index',
+            'check' => fn () => index_exists('Items', 'crawledTime_crawlPriority_itemId_claimedUntil_hostId'),
+            'apply' => function (): void {
+                run_sql('
+ALTER TABLE `Items`
+    ADD KEY `crawledTime_crawlPriority_itemId_claimedUntil_hostId` (`crawledTime`, `crawlPriority` DESC, `itemId` ASC, `claimedUntil`, `hostId`),
+    ALGORITHM=INPLACE, LOCK=NONE
+');
+            },
+        ],
+        [
             'name' => 'create_interactive_retrievals',
             'check' => fn () => table_exists('InteractiveRetrievals'),
             'apply' => function (): void {

@@ -242,14 +242,15 @@ SELECT `Items`.`itemId`, `Items`.`hostId`, `Items`.`crawlPriority`
             }
         }
 
-        // Never-attempted items, driven from the (small) Hosts side: for each
-        // due host, one probe of the hostId_crawledTime_claimedUntil index
-        // answers "any uncrawled, unclaimed item here?".
+        // Scan uncrawled items in priority order through the covering index.
+        // Items must lead the join so LIMIT 1 stops at the first eligible
+        // candidate instead of sorting every due host's items.
         $fresh = mysqli_query($connection, '
 SELECT `Items`.`itemId`, `Items`.`hostId`, `Items`.`crawlPriority`
-    FROM `Hosts`
-    INNER JOIN `Items` ON `Items`.`hostId` = `Hosts`.`hostId` AND `Items`.`crawledTime` IS NULL
-        WHERE (`Items`.`crawlPriority` > 0 OR `Hosts`.`nextCrawlTime` IS NULL OR `Hosts`.`nextCrawlTime` <= UNIX_TIMESTAMP())
+    FROM `Items` FORCE INDEX (`crawledTime_crawlPriority_itemId_claimedUntil_hostId`)
+    STRAIGHT_JOIN `Hosts` ON `Hosts`.`hostId` = `Items`.`hostId`
+        WHERE `Items`.`crawledTime` IS NULL
+        AND (`Items`.`crawlPriority` > 0 OR `Hosts`.`nextCrawlTime` IS NULL OR `Hosts`.`nextCrawlTime` <= UNIX_TIMESTAMP())
         AND (`Items`.`claimedUntil` IS NULL
             OR (`Items`.`crawlPriority` > 0 AND `Items`.`claimedUntil` <= UNIX_TIMESTAMP()))
     ORDER BY `Items`.`crawlPriority` DESC, `Items`.`itemId` ASC
