@@ -31,11 +31,8 @@ class Host {
     // seen shouldn't still be the one being enforced a season later.
     private const ROBOTS_TXT_MAX_AGE_SECONDS = 7 * 24 * 60 * 60;
 
-    // How long before a *failed* robots.txt read is retried. Far shorter than
-    // a successful one's lifetime: a failure means this host is currently
-    // uncrawlable (see isRobotsTxtKnown()), so sitting on that verdict for a
-    // week over what may have been a minute's outage would quietly drop the
-    // whole host from the crawl.
+    // How long before a transient failed robots.txt read is retried. A corrupt
+    // response waits a week; an outage may clear within an hour.
     private const ROBOTS_TXT_RETRY_SECONDS = 60 * 60;
 
     // Statuses that are a real, final answer of "there is no robots.txt here"
@@ -98,6 +95,8 @@ class Host {
     // domains, and no SQL expression can work out where a host's suffix ends.
     public ?string $domain = null;
     public ?string $robotsTxt = null;
+    // 0 = transient failure, 1 = usable rules or definitive absence,
+    // 2 = corrupt response (unknown policy, retried on the weekly schedule).
     public ?int $robotsTxtFetched = null;
     public ?int $robotsTxtFetchedTime = null;
     public ?int $crawlDelaySeconds = null;
@@ -366,6 +365,7 @@ UPDATE `Hosts`
         $url = new URL($scheme . '://' . $this -> host . '/robots.txt');
         $statusCode = null;
         $body = '';
+        $contentType = null;
 
         // Fetched through the same browser every page goes through, not a
         // plain HTTP client. Two reasons, both real: it's the same host the
@@ -392,6 +392,7 @@ UPDATE `Hosts`
             }
 
             $statusCode = $connection -> statusCode;
+            $contentType = $connection -> headers['content-type'] ?? null;
 
             // Every hop is a real request against this host, same as fetching
             // a page - without recording it, first contact with a
@@ -423,8 +424,8 @@ UPDATE `Hosts`
         }
 
         if ($statusCode !== null && $statusCode >= 200 && $statusCode < 300) {
-            $this -> robotsTxt = self::capRobotsTxt($body);
-            $this -> robotsTxtFetched = 1;
+            $this -> robotsTxt = self::robotsTxtFromResponse($body, $contentType);
+            $this -> robotsTxtFetched = $this -> robotsTxt !== null ? 1 : 2;
         } elseif ($statusCode !== null && in_array($statusCode, self::ROBOTS_TXT_ABSENT_STATUS_CODES, true)) {
             // A definitive "there is nothing here" - the overwhelmingly common
             // case, and a real answer: no rules declared means none apply.
@@ -451,14 +452,22 @@ UPDATE `Hosts`
         // stored as its own column - reserveById() needs it inside a single
         // atomic UPDATE, where re-parsing a text blob isn't an option.
         $this -> crawlDelaySeconds = $this -> robotsTxt !== null ? self::crawlDelayFor($this -> robotsTxt) : null;
+        $corruptUntil = $this -> robotsTxtFetched === 2
+            ? $this -> robotsTxtFetchedTime + self::ROBOTS_TXT_MAX_AGE_SECONDS : 0;
 
         $update = mysqli_prepare(Database::connection(), '
 UPDATE `Hosts`
-    SET `robotsTxt` = ?, `robotsTxtFetched` = ?, `robotsTxtFetchedTime` = ?, `crawlDelaySeconds` = ?
+    SET `robotsTxt` = ?, `robotsTxtFetched` = ?, `robotsTxtFetchedTime` = ?, `crawlDelaySeconds` = ?,
+        `nextCrawlTime` = CASE WHEN ? = 2 THEN GREATEST(COALESCE(`nextCrawlTime`, 0), ?) ELSE `nextCrawlTime` END
     WHERE `hostId` = ?
 ');
-        mysqli_stmt_bind_param($update, 'siiii', $this -> robotsTxt, $this -> robotsTxtFetched, $this -> robotsTxtFetchedTime, $this -> crawlDelaySeconds, $this -> hostId);
+        mysqli_stmt_bind_param($update, 'siiiiii', $this -> robotsTxt, $this -> robotsTxtFetched, $this -> robotsTxtFetchedTime,
+            $this -> crawlDelaySeconds, $this -> robotsTxtFetched, $corruptUntil, $this -> hostId);
         mysqli_stmt_execute($update);
+
+        if ($this -> robotsTxtFetched === 2) {
+            $this -> nextCrawlTime = max($this -> nextCrawlTime ?? 0, $corruptUntil);
+        }
 
         return $this -> robotsTxtFetched === 1 && $this -> robotsTxt !== '';
     }
@@ -584,6 +593,32 @@ SELECT COUNT(*) AS `pendingItems`
         return $lastNewline !== false ? substr($capped, 0, $lastNewline) : '';
     }
 
+    /** A corrupt response leaves robots policy unknown instead of allowing a crawl. */
+    public static function robotsTxtFromResponse(string $body, ?string $contentType): ?string {
+        if ($contentType !== null && !str_starts_with((new ContentType($contentType)) -> type, 'text/')) {
+            return null;
+        }
+
+        if (strlen($body) > self::MAX_ROBOTS_TXT_BYTES && !str_contains(substr($body, 0, self::MAX_ROBOTS_TXT_BYTES), "\n")) {
+            return null;
+        }
+
+        $robotsTxt = self::capRobotsTxt($body);
+
+        if (!mb_check_encoding($robotsTxt, 'UTF-8')
+            || preg_match('/[\x{0000}-\x{0008}\x{000B}\x{000C}\x{000E}-\x{001F}\x{007F}-\x{009F}]/u', $robotsTxt) === 1) {
+            return null;
+        }
+
+        $robotsTxt = preg_replace('/^\xEF\xBB\xBF/', '', $robotsTxt);
+
+        if (preg_match('/^\s*<(?:!doctype|html|head|body)\b/i', $robotsTxt) === 1) {
+            return null;
+        }
+
+        return $robotsTxt;
+    }
+
     private function isRobotsTxtStale(): bool {
         if ($this -> robotsTxtFetchedTime === null) {
             return true;
@@ -591,7 +626,7 @@ SELECT COUNT(*) AS `pendingItems`
 
         $age = time() - $this -> robotsTxtFetchedTime;
 
-        return $age >= ($this -> isRobotsTxtKnown() ? self::ROBOTS_TXT_MAX_AGE_SECONDS : self::ROBOTS_TXT_RETRY_SECONDS);
+        return $age >= ($this -> robotsTxtFetched === 0 ? self::ROBOTS_TXT_RETRY_SECONDS : self::ROBOTS_TXT_MAX_AGE_SECONDS);
     }
 
     /** Same-host-only robots redirect policy, exposed for regression tests. */

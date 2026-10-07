@@ -16,6 +16,31 @@ function robots_test_host(string $robotsTxt): Host {
 
 $nl = chr(10);
 
+assert_same('plain robots rules accepted', 'User-agent: *' . $nl . 'Disallow: /private/',
+    Host::robotsTxtFromResponse('User-agent: *' . $nl . 'Disallow: /private/', 'text/plain; charset=UTF-8'));
+assert_same('other text MIME accepted', 'User-agent: *', Host::robotsTxtFromResponse('User-agent: *', 'text/x-robots'));
+assert_same('empty robots file accepted', '', Host::robotsTxtFromResponse('', 'text/plain'));
+assert_same('UTF-8 BOM removed', 'User-agent: *', Host::robotsTxtFromResponse("\xEF\xBB\xBFUser-agent: *", null));
+assert_same('PNG response rejected', null, Host::robotsTxtFromResponse("\x89PNG\r\n\x1A\n", 'image/png'));
+assert_same('binary body rejected without content type', null, Host::robotsTxtFromResponse("\x89PNG\r\n\x1A\n", null));
+assert_same('invalid UTF-8 rejected', null, Host::robotsTxtFromResponse("User-agent: *\nDisallow: /\xFF", 'text/plain'));
+assert_same('NUL byte rejected', null, Host::robotsTxtFromResponse("User-agent: *\nDisallow: /\x00", 'text/plain'));
+assert_same('HTML error page rejected', null, Host::robotsTxtFromResponse('<!DOCTYPE html><html>error</html>', 'text/plain'));
+assert_same('binary MIME rejected even with ASCII body', null, Host::robotsTxtFromResponse('User-agent: *', 'application/octet-stream'));
+assert_same('overlong line without a complete rule rejected', null,
+    Host::robotsTxtFromResponse(str_repeat('A', 500 * 1024 + 1), 'text/plain'));
+
+$staleMethod = new ReflectionMethod(Host::class, 'isRobotsTxtStale');
+$corrupt = new Host();
+$corrupt -> robotsTxtFetched = 2;
+$corrupt -> robotsTxtFetchedTime = time() - 2 * 60 * 60;
+assert_false('corrupt robots response is not retried after two hours', $staleMethod -> invoke($corrupt));
+$corrupt -> robotsTxtFetchedTime = time() - 8 * 24 * 60 * 60;
+assert_true('corrupt robots response is retried after a week', $staleMethod -> invoke($corrupt));
+$corrupt -> robotsTxtFetched = 0;
+$corrupt -> robotsTxtFetchedTime = time() - 2 * 60 * 60;
+assert_true('temporary robots failure retains hourly retry', $staleMethod -> invoke($corrupt));
+
 $redirectHost = new Host();
 $redirectHost -> host = 'example.com';
 assert_true(
