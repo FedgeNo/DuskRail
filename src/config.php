@@ -21,9 +21,9 @@ return [
     // empty hash means "nobody can sign in", which is the only safe way for an
     // install that never configured one to fail.
     'authPasswordHash' => Env::get('AUTH_PASSWORD_HASH', ''),
-    // Shared server-to-server credential for SourceLedger's interactive
-    // retrieval seam. Empty means the seam is disabled.
-    'sourceLedgerToken' => Env::get('SOURCELEDGER_TOKEN', ''),
+    // Shared server-to-server bearer token for the Retrieval API (web
+    // search and interactive page retrieval). Empty disables the API.
+    'retrievalAPIToken' => Env::get('RETRIEVAL_API_TOKEN', ''),
     // How many bin/crawler.php workers bin/crawler-manager.php runs at once.
     // Configuration rather than a constant in the manager because the
     // installer has to know it too - each slot needs its own writable

@@ -214,7 +214,7 @@ INSERT INTO `Items` (`url`, `hostId`, `type`, `crawlPriority`, `crawledTime`, `c
     private static function selectCandidateRow(?string $topic): ?array {
         $connection = Database::connection();
 
-        if (Setting::value(SOURCELEDGER_ONLY_SETTING) === '1') {
+        if (Setting::value(INTERACTIVE_ONLY_SETTING) === '1') {
             $interactive = mysqli_query($connection, '
 SELECT `Items`.`itemId`, `Items`.`hostId`, `Items`.`crawlPriority`
     FROM `Items` FORCE INDEX (`crawlPriority_itemId`)
@@ -932,9 +932,9 @@ SELECT `itemId`, `url`, `hostId`, `type`, `title`, `description`, `keywords`,
             $survivorId = (int) $row['itemId'];
             InteractiveRetrieval::redirect($this -> itemId, $survivorId);
 
-            // Keep earlier SourceLedger IDs resolvable across multiple merges.
+            // Keep earlier client-held item IDs resolvable across multiple merges.
             $aliases = mysqli_prepare($connection, '
-UPDATE `SourceLedgerRedirects`
+UPDATE `ItemAliases`
     SET `targetItemId` = ?
     WHERE `targetItemId` = ?
 ');
@@ -943,7 +943,7 @@ UPDATE `SourceLedgerRedirects`
 
             if ($this -> crawlPriority === 255) {
                 $redirect = mysqli_prepare($connection, '
-INSERT INTO `SourceLedgerRedirects` (`sourceItemId`, `targetItemId`, `sourceURL`, `createdTime`)
+INSERT INTO `ItemAliases` (`sourceItemId`, `targetItemId`, `sourceURL`, `createdTime`)
     VALUES (?, ?, ?, ?)
     ON DUPLICATE KEY UPDATE `targetItemId` = VALUES(`targetItemId`), `sourceURL` = VALUES(`sourceURL`), `createdTime` = VALUES(`createdTime`)
 ');

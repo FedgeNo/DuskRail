@@ -1,9 +1,9 @@
 # NewsNow Search
 
 `php bin/search-newsnow.php 'trump farmers' 10` and the authenticated
-`api/sourceledger-search.php` endpoint with `engine=newsnow` use NewsNow's
+`api/web-search.php` endpoint with `engine=newsnow` use NewsNow's
 English headline search. The adapter remains available through the endpoint,
-but SourceLedger currently uses Marginalia for news research.
+though Marginalia is the default engine.
 
 The parser preserves headline, publisher, displayed time, publication timestamp,
 rank and NewsNow's article redirect URL. NewsNow does not supply article excerpts

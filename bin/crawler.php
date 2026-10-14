@@ -31,7 +31,7 @@ const PDF_EXTRACT_STALE_SECONDS = 3600;
 
 /**
  * Every actual ordinary request made (each redirect hop, and the final fetch)
- * counts toward that host's politeness cooldown. Interactive SourceLedger
+ * counts toward that host's politeness cooldown. Interactive Retrieval API
  * requests deliberately skip that cooldown for realtime work. $statusCode is
  * null when the connection itself never completed (DNS failure, connection
  * refused, TLS handshake failure, ...).
@@ -64,7 +64,7 @@ function hostFor(URL $url, string $chromeEndpoint, bool $realtime): ?Host {
     }
 
     if ($host -> fetchRobotsTxtIfStale($url -> scheme, $chromeEndpoint, $realtime)
-        && Setting::value(SOURCELEDGER_ONLY_SETTING) !== '1'
+        && Setting::value(INTERACTIVE_ONLY_SETTING) !== '1'
         && $host -> robotsTxt !== null && $host -> robotsTxt !== '') {
         $queued = Sitemap::ingestFor($host, $host -> robotsTxt);
 

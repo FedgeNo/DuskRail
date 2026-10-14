@@ -1,7 +1,7 @@
-# SourceLedger-Only Crawling
+# Interactive-Only Crawling
 
-Set the `Settings` row `sourceLedgerOnly` to `1` to restrict crawling to
-active SourceLedger interactive requests. Set it to `0` to resume ordinary
+Set the `Settings` row `interactiveOnly` to `1` to restrict crawling to
+active interactive Retrieval API requests (see `retrieval-api.md`). Set it to `0` to resume ordinary
 crawling. A missing setting also permits ordinary crawling.
 
 The setting is read at queue selection, before focused crawling or any ordinary
@@ -21,7 +21,7 @@ Restart `duskrail-crawler.service` to drain the old workers and start fresh ones
 From the project root, enable with:
 
 ```sh
-php -r 'require "init.php"; Setting::store(SOURCELEDGER_ONLY_SETTING, "1");'
+php -r 'require "init.php"; Setting::store(INTERACTIVE_ONLY_SETTING, "1");'
 ```
 
 Use `"0"` instead of `"1"` to disable the restriction.

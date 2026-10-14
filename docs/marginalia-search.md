@@ -1,7 +1,7 @@
 # Marginalia Browser Search
 
 Run `php bin/search-marginalia.php 'World Health Organization air quality' 10`.
-The existing bearer-authenticated `api/sourceledger-search.php` endpoint also
+The existing bearer-authenticated `api/web-search.php` endpoint also
 accepts `engine=marginalia`, `query`, and `limit` as POST fields.
 
 The adapter uses the shared Chromium browser, an isolated tab, public-address
@@ -9,7 +9,7 @@ validation, engine-domain request restrictions, a per-engine concurrency lock
 and the shared 30-second timeout. It returns organic titles, URLs, snippets,
 positions and engine names. Related links, navigation and duplicate URLs are
 excluded. Unknown markup is an error rather than a successful empty result.
-SourceLedger uses this endpoint for news and other non-encyclopedic claim searches.
+It is the default engine of the Retrieval API's web search (see `retrieval-api.md`).
 All engines share the global search lock and two-second post-completion cooldown
 documented in newsnow-search.md. A dedicated on-demand
 PHP-FPM pool runs this endpoint as the crawler service account so it can access

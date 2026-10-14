@@ -60,7 +60,7 @@ CREATE TABLE `InteractiveRetrievals` (
   KEY `itemId` (`itemId`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-CREATE TABLE `SourceLedgerRedirects` (
+CREATE TABLE `ItemAliases` (
   `sourceItemId` int(10) unsigned NOT NULL,
   `targetItemId` int(10) unsigned NOT NULL,
   `sourceURL` varchar(767) NOT NULL,

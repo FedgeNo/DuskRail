@@ -8,7 +8,7 @@ $config = require ROOT_DIR . '/src/config.php';
 
 header('Content-Type: application/json');
 
-$configured_token = (string) $config['sourceLedgerToken'];
+$configured_token = (string) $config['retrievalAPIToken'];
 $authorization = (string) ($_SERVER['HTTP_AUTHORIZATION'] ?? $_SERVER['REDIRECT_HTTP_AUTHORIZATION'] ?? '');
 $provided_token = str_starts_with($authorization, 'Bearer ')
     ? substr($authorization, 7)
@@ -40,7 +40,7 @@ if ($request !== null && $request -> state($item, time()) === 'failed') {
 if ($item === null) {
     $redirect = mysqli_prepare(Database::connection(), '
 SELECT `targetItemId`
-    FROM `SourceLedgerRedirects`
+    FROM `ItemAliases`
     WHERE `sourceItemId` = ?
     LIMIT 1
 ');

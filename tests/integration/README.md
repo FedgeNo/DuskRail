@@ -15,7 +15,7 @@ The dependency-free suites run separately:
 
 `php tests/integration/redirect-priority-test.php /tmp/duskrail-optimization-tests.XXXXXX`
 requires only the disposable MariaDB instance. It checks priority transfer and
-SourceLedger aliases across redirect merges, with search and thumbnail side
+Retrieval API item aliases across redirect merges, with search and thumbnail side
 effects stubbed so application services and files remain untouched.
 
 ```sh

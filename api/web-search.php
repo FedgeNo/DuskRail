@@ -6,7 +6,7 @@ require __DIR__ . '/../init.php';
 $config = require SRC_DIR . '/config.php';
 $authorization = (string) ($_SERVER['HTTP_AUTHORIZATION'] ?? $_SERVER['REDIRECT_HTTP_AUTHORIZATION'] ?? '');
 $provided_token = str_starts_with($authorization, 'Bearer ') ? substr($authorization, 7) : '';
-if ($config['sourceLedgerToken'] === '' || $provided_token === '' || !hash_equals($config['sourceLedgerToken'], $provided_token)) {
+if ($config['retrievalAPIToken'] === '' || $provided_token === '' || !hash_equals($config['retrievalAPIToken'], $provided_token)) {
     SearchJSONResponse::send(['error' => 'Authentication required.'], 401);
 }
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {

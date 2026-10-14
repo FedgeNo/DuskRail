@@ -1373,11 +1373,13 @@ CREATE TABLE `InteractiveRetrievals` (
             },
         ],
         [
-            'name' => 'create_sourceledger_redirects',
-            'check' => fn () => table_exists('SourceLedgerRedirects'),
+            'name' => 'create_item_aliases',
+            // An install from before the rename has the table under its old
+            // name; the next delta renames it instead of starting it empty.
+            'check' => fn () => table_exists('ItemAliases') || table_exists('SourceLedgerRedirects'),
             'apply' => function (): void {
                 run_sql('
-CREATE TABLE `SourceLedgerRedirects` (
+CREATE TABLE `ItemAliases` (
   `sourceItemId` int(10) unsigned NOT NULL,
   `targetItemId` int(10) unsigned NOT NULL,
   `sourceURL` varchar(767) NOT NULL,
@@ -1386,6 +1388,25 @@ CREATE TABLE `SourceLedgerRedirects` (
   KEY `targetItemId` (`targetItemId`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
 ');
+            },
+        ],
+        [
+            'name' => 'rename_legacy_item_aliases',
+            'check' => fn () => !table_exists('SourceLedgerRedirects'),
+            'apply' => function (): void {
+                run_sql('RENAME TABLE `SourceLedgerRedirects` TO `ItemAliases`');
+            },
+        ],
+        [
+            'name' => 'rename_legacy_interactive_only_setting',
+            'check' => function (): bool {
+                $result = mysqli_query(Database::connection(), 'SELECT 1 FROM `Settings` WHERE `name` = \'sourceLedgerOnly\'');
+
+                return $result !== false && mysqli_num_rows($result) === 0;
+            },
+            'apply' => function (): void {
+                run_sql('UPDATE IGNORE `Settings` SET `name` = \'interactiveOnly\' WHERE `name` = \'sourceLedgerOnly\'');
+                run_sql('DELETE FROM `Settings` WHERE `name` = \'sourceLedgerOnly\'');
             },
         ],
     ];

@@ -14,7 +14,7 @@ if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     exit;
 }
 
-$configured_token = trim((string) $config['sourceLedgerToken']);
+$configured_token = trim((string) $config['retrievalAPIToken']);
 $authorization = (string) ($_SERVER['HTTP_AUTHORIZATION'] ?? $_SERVER['REDIRECT_HTTP_AUTHORIZATION'] ?? '');
 $provided_token = str_starts_with($authorization, 'Bearer ')
     ? trim(substr($authorization, 7))
