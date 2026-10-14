@@ -3,10 +3,9 @@
 declare(strict_types=1);
 
 /**
- * Resolves a JS bot-challenge interstitial (Cloudflare's "Just a moment...",
- * similar from other WAFs) by handing already-fetched HTML to a tab in the
- * shared, persistent Chrome instance (ChromeProcess/ChromeTab) and letting it
- * run the challenge script. Fetching the page for real is ChromeConnection's
+ * Renders already-fetched HTML, including JS bot-challenge interstitials,
+ * in the shared Chrome instance before the crawler extracts content.
+ * Fetching the page for real is ChromeConnection's
  * job now (see its docblock) - this class never does a top-level fetch of
  * its own either way. Instead it navigates a fresh tab to the real URL and,
  * via the Fetch domain, intercepts that one top-level document request and
@@ -27,16 +26,13 @@ class HeadlessBrowser {
     // The challenge itself gets up to thirty seconds after its document has
     // loaded to complete verification, reload, or redirect.
     private const SETTLE_SECONDS = 30.0;
+    private const DOCUMENT_SETTLE_SECONDS = 3.0;
 
     private const EVALUATE_TIMEOUT_SECONDS = 3.0;
 
     /**
-     * Hosts whose requests are refused while a challenge page runs. This is
-     * the only place blocking can do anything: ChromeConnection fails the
-     * document request outright, so an ordinary crawl never parses a page and
-     * never asks for a subresource. Here the page really does load, and
-     * everything it pulls in competes for the same connection the crawl needs
-     * - while none of it helps a challenge script prove we're a browser.
+     * Advertising and analytics requests compete with content scripts while
+     * a document renders, without helping populate the searchable content.
      *
      * Matched as domain suffixes, so a subdomain is covered by its parent.
      */
@@ -73,6 +69,14 @@ class HeadlessBrowser {
      * itself) didn't finish inside its budget.
      */
     public static function resolveChallenge(string $hostAndPort, string $html, URL $pageURL): ?string {
+        return self::renderDocument($hostAndPort, $html, $pageURL, true);
+    }
+
+    public static function render(string $hostAndPort, string $html, URL $pageURL): ?string {
+        return self::renderDocument($hostAndPort, $html, $pageURL, false);
+    }
+
+    private static function renderDocument(string $hostAndPort, string $html, URL $pageURL, bool $challenge): ?string {
         try {
             $tab = new ChromeTab($hostAndPort, self::HANDSHAKE_TIMEOUT_SECONDS);
         } catch (\Throwable) {
@@ -80,7 +84,7 @@ class HeadlessBrowser {
         }
 
         try {
-            return self::run($tab, $html, $pageURL);
+            return self::run($tab, $html, $pageURL, $challenge);
         } catch (\Throwable) {
             return null;
         } finally {
@@ -94,7 +98,7 @@ class HeadlessBrowser {
      * (and, per SETTLE_SECONDS, whatever the challenge does right after) to
      * settle, then read back the resulting DOM.
      */
-    private static function run(ChromeTab $tab, string $html, URL $pageURL): ?string {
+    private static function run(ChromeTab $tab, string $html, URL $pageURL, bool $challenge): ?string {
         $pageURLString = $pageURL -> toString();
 
         $tab -> sendCommand('Network.setUserAgentOverride', [
@@ -130,6 +134,11 @@ class HeadlessBrowser {
 
         while (true) {
             $deadline = $settle_deadline ?? $navigation_deadline;
+
+            if (microtime(true) >= $deadline) {
+                break;
+            }
+
             $message = $tab -> receiveMessage($deadline);
 
             if ($message === null) {
@@ -137,13 +146,13 @@ class HeadlessBrowser {
             }
 
             if (($message['method'] ?? null) === 'Fetch.requestPaused') {
-                self::handleRequestPaused($tab, $message['params'], $pageURL, $html, $mainDocumentFulfilled);
+                self::handleRequestPaused($tab, $message['params'], $pageURL, $html, $mainDocumentFulfilled, $challenge);
                 continue;
             }
 
             if (($message['method'] ?? null) === 'Page.loadEventFired' && !$loadEventFired) {
                 $loadEventFired = true;
-                $settle_deadline = microtime(true) + self::SETTLE_SECONDS;
+                $settle_deadline = microtime(true) + ($challenge ? self::SETTLE_SECONDS : self::DOCUMENT_SETTLE_SECONDS);
             }
 
             if ($settle_deadline !== null && microtime(true) >= $settle_deadline) {
@@ -164,14 +173,20 @@ class HeadlessBrowser {
         ]);
 
         $response = $tab -> waitUntil(
-            fn (array $message): bool => ($message['id'] ?? null) === $evaluateId,
+            function (array $message) use ($tab, $pageURL, $html, &$mainDocumentFulfilled, $challenge, $evaluateId): bool {
+                if (($message['method'] ?? null) === 'Fetch.requestPaused') {
+                    self::handleRequestPaused($tab, $message['params'], $pageURL, $html, $mainDocumentFulfilled, $challenge);
+                }
+
+                return ($message['id'] ?? null) === $evaluateId;
+            },
             microtime(true) + self::EVALUATE_TIMEOUT_SECONDS
         );
 
         return $response['result']['result']['value'] ?? null;
     }
 
-    private static function handleRequestPaused(ChromeTab $tab, array $params, URL $pageURL, string $html, bool &$mainDocumentFulfilled): void {
+    private static function handleRequestPaused(ChromeTab $tab, array $params, URL $pageURL, string $html, bool &$mainDocumentFulfilled, bool $challenge): void {
         $requestId = $params['requestId'];
         $isMainDocument = !$mainDocumentFulfilled
             && ($params['resourceType'] ?? null) === 'Document'
@@ -191,7 +206,11 @@ class HeadlessBrowser {
 
         $url = (string) ($params['request']['url'] ?? '');
 
-        if (!self::isAllowedChallengeTarget($url, $pageURL) || self::isBlocked($url)) {
+        // Normal document navigations still belong to the crawler's redirect
+        // and robots checks. Scripts, styles and data may use public CDNs.
+        $allowed = $challenge ? self::isAllowedChallengeTarget($url, $pageURL) : self::isAllowedRenderTarget($url);
+
+        if ((!$challenge && ($params['resourceType'] ?? null) === 'Document') || !$allowed || self::isBlocked($url)) {
             $tab -> sendCommand('Fetch.failRequest', ['requestId' => $requestId, 'errorReason' => 'BlockedByClient']);
 
             return;
@@ -206,21 +225,15 @@ class HeadlessBrowser {
     /**
      * Whether $url is somewhere this crawler is willing to let a page reach.
      *
-     * This is the one place in the whole crawler where untrusted markup
-     * actually runs, with a real origin and real network access, and it is
-     * reached on the page's own say-so - JS_CHALLENGE_TITLES is matched
-     * against a <title>, which any site can set to anything. Everything the
-     * page then asks for is a request this process makes on its behalf, so
-     * "anywhere at all" is not an acceptable range: without this, a page that
-     * calls itself "Just a moment..." can have subresources fetched from
-     * localhost, from the machine's own network, or from the DevTools port
-     * that drives this very browser.
-     *
-     * Only http(s) is allowed through, and only to somewhere on the public
-     * internet - resolved for real rather than pattern-matched on the name,
-     * since a name is not an address (see IPAddress).
+     * Challenges retain their narrower domain policy; ordinary rendering
+     * also allows public CDNs used by the page's scripts and data requests.
      */
     public static function isAllowedChallengeTarget(string $url, URL $pageURL): bool {
+        return self::isAllowedChallengeHost((string) parse_url($url, PHP_URL_HOST), $pageURL)
+            && self::isAllowedRenderTarget($url);
+    }
+
+    public static function isAllowedRenderTarget(string $url): bool {
         $scheme = strtolower((string) parse_url($url, PHP_URL_SCHEME));
         $host = strtolower((string) parse_url($url, PHP_URL_HOST));
 
@@ -232,15 +245,13 @@ class HeadlessBrowser {
         // syntax rather than part of the address.
         $host = trim($host, '[]');
 
-        // No literal can share a registrable domain with the page, and no
-        // challenge provider is addressed this way. Refusing them also keeps
-        // the domain comparison below unambiguous.
+        // Browser subresources use DNS names, checked for public addresses
+        // before continuing the request. Literal addresses stay disallowed.
         if (filter_var($host, FILTER_VALIDATE_IP) !== false) {
             return false;
         }
 
-        return self::isAllowedChallengeHost($host, $pageURL)
-            && IPAddress::hostResolvesPublicly($host);
+        return IPAddress::hostResolvesPublicly($host);
     }
 
     /** Pure hostname scope policy, kept public so its boundary is testable. */

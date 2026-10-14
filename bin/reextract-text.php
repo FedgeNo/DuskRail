@@ -74,7 +74,7 @@ foreach ($ids as $itemId) {
     HTMLLoader::separateBlockElements($document);
     HTMLLoader::inlineImageAltText($document);
     $metadata = HTMLLoader::extractMetadata($document);
-    HTMLLoader::removeStyleAndScriptTags($document);
+    HTMLLoader::removeNonContentElements($document);
     HTMLLoader::removeBoilerplateElements($document);
     // Same cap Item::markCrawled() applies, so the comparison below is
     // stored-form against stored-form rather than reporting every page with a

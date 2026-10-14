@@ -51,9 +51,6 @@ class ChromeProcess {
         '--disable-background-timer-throttling',
         '--disable-backgrounding-occluded-windows',
         '--disable-renderer-backgrounding',
-        // /dev/shm is small on many systems and Chrome falls over when it
-        // fills; this trades a little speed for not dying.
-        '--disable-dev-shm-usage',
         '--mute-audio',
         // A page that renders for real (HeadlessBrowser::resolveChallenge())
         // can open windows and tabs of its own. Nothing here would ever look
@@ -110,9 +107,12 @@ class ChromeProcess {
         mkdir($this -> userDataDir, 0700, true);
 
         $descriptors = [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']];
+        // Niced so the crawler's browser never competes with the sites
+        // sharing this server; nice execs Chrome, so the PID is unchanged.
         $process = proc_open(array_merge(
-            [$binary],
+            is_executable('/usr/bin/nice') ? ['/usr/bin/nice', '-n', '10', $binary] : [$binary],
             self::LAUNCH_FLAGS,
+            (require ROOT_DIR . '/src/config.php')['chromeDisableDevShmUsage'] ? ['--disable-dev-shm-usage'] : [],
             [
                 '--proxy-server=socks5://' . $proxyHostAndPort,
                 // Make Chromium hand destination names to the SOCKS proxy.

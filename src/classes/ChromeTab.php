@@ -28,6 +28,8 @@ class ChromeTab {
     private string $browserContextId;
     private WebSocketClient $ws;
     private int $nextCommandId = 1;
+    private ?OutboundProxyProcess $outboundProxy = null;
+    public readonly ?string $outboundAddress;
 
     public function __construct(string $hostAndPort, float $handshakeTimeoutSeconds) {
         $browserWsURL = self::browserWebSocketURL($hostAndPort);
@@ -39,6 +41,8 @@ class ChromeTab {
         $this -> browserWs = new WebSocketClient($browserWsURL, $handshakeTimeoutSeconds);
 
         try {
+            $this -> outboundAddress = BrowserEgress::nextAddress(Env::get('BROWSER_OUTBOUND_IPS', ''), VAR_DIR . '/browser-egress-counter');
+            if ($this -> outboundAddress !== null) $this -> outboundProxy = new OutboundProxyProcess($this -> outboundAddress);
             $this -> browserContextId = $this -> createBrowserContext();
 
             $targetId = $this -> createTarget($this -> browserContextId);
@@ -54,6 +58,7 @@ class ChromeTab {
             }
 
             $this -> browserWs -> close();
+            $this -> outboundProxy ?-> shutdown();
 
             throw $exception;
         }
@@ -109,13 +114,21 @@ class ChromeTab {
     }
 
     public function close(): void {
-        $this -> ws -> close();
-        $this -> disposeBrowserContext();
-        $this -> browserWs -> close();
+        try {
+            $this -> ws -> close();
+            $this -> disposeBrowserContext();
+            $this -> browserWs -> close();
+        } finally {
+            $this -> outboundProxy ?-> shutdown();
+        }
     }
 
     private function createBrowserContext(): string {
-        $id = $this -> sendBrowserCommand('Target.createBrowserContext');
+        $params = [];
+        if ($this -> outboundProxy !== null) {
+            $params = ['proxyServer' => 'socks5://' . $this -> outboundProxy -> hostAndPort, 'proxyBypassList' => '<-loopback>'];
+        }
+        $id = $this -> sendBrowserCommand('Target.createBrowserContext', $params);
         $response = $this -> waitForBrowserResponse($id, microtime(true) + self::CONTEXT_TIMEOUT_SECONDS);
         $contextId = $response['result']['browserContextId'] ?? null;
 

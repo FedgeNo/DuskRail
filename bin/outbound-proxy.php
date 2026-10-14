@@ -27,6 +27,13 @@ const PROXY_IDLE_TIMEOUT_SECONDS = 30;
 const PROXY_MAX_CHILDREN = 64;
 
 $parentPid = max(1, (int) ($argv[1] ?? 0));
+$source_address = $argv[2] ?? null;
+if ($source_address !== null) {
+    if (count(BrowserEgress::addresses($source_address)) !== 1) throw new InvalidArgumentException('The outbound proxy requires one source address.');
+    $binding = stream_socket_server('tcp://' . $source_address . ':0', $bind_error, $bind_message, STREAM_SERVER_BIND);
+    if ($binding === false) throw new RuntimeException('Could not bind outbound source address: ' . $bind_message);
+    fclose($binding);
+}
 $errorNumber = 0;
 $errorMessage = '';
 $server = stream_socket_server('tcp://127.0.0.1:0', $errorNumber, $errorMessage, STREAM_SERVER_BIND | STREAM_SERVER_LISTEN);
@@ -103,7 +110,7 @@ while (is_resource($server)) {
     }
 
     fclose($server);
-    proxy_handle_client($client);
+    proxy_handle_client($client, $source_address);
     fclose($client);
     exit(0);
 }
@@ -111,7 +118,7 @@ while (is_resource($server)) {
 fclose($server);
 
 /** @param resource $client */
-function proxy_handle_client($client): void {
+function proxy_handle_client($client, ?string $source_address): void {
     proxy_debug('client accepted');
     stream_set_timeout($client, PROXY_HANDSHAKE_TIMEOUT_SECONDS);
     $header = proxy_read_exact($client, 2);
@@ -169,6 +176,14 @@ function proxy_handle_client($client): void {
         return;
     }
 
+    if ($source_address !== null) {
+        $addresses = array_values(array_filter($addresses, static fn(string $address): bool => !str_contains($address, ':')));
+        if ($addresses === []) {
+            proxy_debug('no IPv4 destination available for the bound source address');
+            proxy_reply($client, 4);
+            return;
+        }
+    }
     $address = $addresses[0];
     $endpoint = str_contains($address, ':') ? '[' . $address . ']:' . $port : $address . ':' . $port;
     $errorNumber = 0;
@@ -178,7 +193,8 @@ function proxy_handle_client($client): void {
         $errorNumber,
         $errorMessage,
         PROXY_CONNECT_TIMEOUT_SECONDS,
-        STREAM_CLIENT_CONNECT
+        STREAM_CLIENT_CONNECT,
+        stream_context_create($source_address === null ? [] : ['socket' => ['bindto' => $source_address . ':0']])
     );
 
     if ($upstream === false) {

@@ -357,7 +357,7 @@ UPDATE `Hosts`
      * happened and came back readable - the moment sitemap ingestion (see
      * Sitemap) is worth running, since the Sitemap: lines just arrived.
      */
-    public function fetchRobotsTxtIfStale(string $scheme, string $chromeEndpoint): bool {
+    public function fetchRobotsTxtIfStale(string $scheme, string $chromeEndpoint, bool $realtime = false): bool {
         if (!$this -> isRobotsTxtStale()) {
             return false;
         }
@@ -398,7 +398,9 @@ UPDATE `Hosts`
             // a page - without recording it, first contact with a
             // never-before-seen host would fire these and the page request
             // back to back, before any politeness cooldown applied.
-            $this -> recordCrawl($statusCode !== null && in_array($statusCode, [429, 503], true));
+            if (!$realtime) {
+                $this -> recordCrawl($statusCode !== null && in_array($statusCode, [429, 503], true));
+            }
 
             if ($statusCode === null || $statusCode < 300 || $statusCode >= 400) {
                 $body = $connection -> readBody();

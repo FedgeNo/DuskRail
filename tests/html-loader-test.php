@@ -4,6 +4,34 @@ declare(strict_types=1);
 
 $pageURL = new URL('https://example.com/dir/page.html');
 
+// Non-rendered content must not become discovery descriptions or links.
+$hiddenContent = HTMLLoader::load('<html><head><title>Page Title</title></head><body><div>'
+    . '<script type="application/ld+json">{"@type":"Article","description":"Structured description","keywords":["cats","photos"]}</script>'
+    . '<script>window.secret = "script text";</script><script>more script text</script>'
+    . '<style>.secret { display: none; }</style><noscript>noscript text<img src="/noscript.jpg"></noscript>'
+    . '<template>template text<img src="/template.jpg"><a href="/template">hidden link</a></template>'
+    . '<iframe src="/frame">iframe fallback text</iframe>'
+    . '<span hidden>hidden text<img src="/hidden.jpg"></span>'
+    . '<span style="DISPLAY: none !important">css hidden text<img src="/css.jpg"></span>'
+    . '<span style="display: none; display: block">Visible override</span>'
+    . '<span style="display: none !important; display: block">important hidden text</span>'
+    . '<span aria-hidden="true">Visible decoration</span>'
+    . '<img src="/visible.jpg" alt="A cat"><a href="/visible">Caption</a>'
+    . '</div></body></html>', null);
+$visibleMetadata = HTMLLoader::extractMetadata($hiddenContent);
+HTMLLoader::removeNonContentElements($hiddenContent);
+HTMLLoader::separateBlockElements($hiddenContent);
+HTMLLoader::inlineImageAltText($hiddenContent);
+$visibleImages = HTMLLoader::extractImageLinks($hiddenContent, $pageURL);
+$visibleLinks = HTMLLoader::extractAnchorLinks($hiddenContent, $pageURL);
+assert_same('only visible images are discovered', 1, count($visibleImages));
+assert_same('only visible links are discovered', 1, count($visibleLinks));
+assert_same('image description excludes non-rendered content', 'Visible overrideVisible decoration A cat Caption', $visibleImages[0]['description']);
+assert_same('link description excludes non-rendered content', $visibleImages[0]['description'], $visibleLinks[0]['description']);
+assert_same('JSON-LD description extracted before cleanup', 'Structured description', $visibleMetadata['description']);
+assert_same('page title extracted before head removal', 'Page Title', $visibleMetadata['title']);
+assert_same('all scripts including JSON-LD removed before image extraction', 0, $hiddenContent -> getElementsByTagName('script') -> length);
+
 // Charset: BOM beats everything, header beats meta, meta beats the default.
 $bom = chr(0xEF) . chr(0xBB) . chr(0xBF) . '<html><body>caf&#233;</body></html>';
 assert_same('BOM page reads clean', 'café', HTMLLoader::extractBodyText(HTMLLoader::load($bom, null)));

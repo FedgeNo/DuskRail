@@ -596,6 +596,21 @@ if (in_array($metadata['title'], JS_CHALLENGE_TITLES, true)) {
 
     echo 'JS challenge resolved via headless browser.
 ';
+} else {
+    $renderedHTML = HeadlessBrowser::render($chromeEndpoint, $html, $pageURL);
+
+    if ($renderedHTML === null) {
+        echo 'Document rendering did not finish, leaving item for retry.
+';
+        exit(0);
+    }
+
+    $html = $renderedHTML;
+    $document = HTMLLoader::load($html, 'UTF-8');
+    $baseURL = HTMLLoader::baseURL($document, $pageURL);
+    HTMLLoader::separateBlockElements($document);
+    HTMLLoader::inlineImageAltText($document);
+    $metadata = HTMLLoader::extractMetadata($document);
 }
 
 // A canonical declaration pointing somewhere else is the site saying "this
@@ -647,10 +662,11 @@ $metaDirectives = HTMLLoader::robotsDirectives($document);
 $noindex = $headerDirectives['noindex'] || $metaDirectives['noindex'];
 $nofollow = $headerDirectives['nofollow'] || $metaDirectives['nofollow'];
 
+HTMLLoader::removeNonContentElements($document);
+
 if ($nofollow) {
     // The page asked for its links not to be followed - skip discovery
     // entirely, then index (or not, per noindex) the page itself as normal.
-    HTMLLoader::removeStyleAndScriptTags($document);
     HTMLLoader::removeBoilerplateElements($document);
     $bodyText = HTMLLoader::extractBodyText($document);
 
@@ -730,7 +746,6 @@ foreach ($anchorLinks as $link) {
     ];
 }
 
-HTMLLoader::removeStyleAndScriptTags($document);
 HTMLLoader::removeBoilerplateElements($document);
 $bodyText = HTMLLoader::extractBodyText($document);
 

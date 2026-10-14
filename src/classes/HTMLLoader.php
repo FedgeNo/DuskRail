@@ -520,16 +520,38 @@ class HTMLLoader {
     }
 
     /**
-     * Strips every <style> and <script> element out of the document - their
-     * text content (raw CSS rules, raw JS source) is a real child node as
-     * far as the DOM is concerned, so a plain textContent walk would pull
-     * all of it in as if it were visible page text. Call this after
-     * extractMetadata() (which still needs <script type="application/
-     * ld+json"> intact) and right before extractBodyText().
+     * Remove non-rendered content before discovering images or links.
+     * Metadata, base URLs and robots directives must be read first because
+     * they live in the head or in JSON-LD scripts.
      */
-    public static function removeStyleAndScriptTags(\DOMDocument $document): void {
-        foreach (['style', 'script'] as $tagName) {
+    public static function removeNonContentElements(\DOMDocument $document): void {
+        foreach (['script', 'style', 'noscript', 'template', 'head', 'iframe'] as $tagName) {
             self::removeElements($document -> getElementsByTagName($tagName));
+        }
+
+        $xpath = new \DOMXPath($document);
+        self::removeElements($xpath -> query('//*[@hidden]'));
+
+        foreach (iterator_to_array($xpath -> query('//*[@style]')) as $element) {
+            // Only display:none hides the entire subtree regardless of a
+            // descendant's own styles. aria-hidden is not visual hiding.
+            $style = preg_replace('~/\*.*?\*/~s', '', $element -> getAttribute('style'));
+            preg_match_all('/(?:^|;)\s*display\s*:\s*([^;]*)/i', $style, $declarations);
+            $display = '';
+            $important = false;
+
+            foreach ($declarations[1] as $declaration) {
+                $hasPriority = preg_match('/!\s*important\s*$/i', $declaration) === 1;
+
+                if (!$important || $hasPriority) {
+                    $display = strtolower(trim(preg_replace('/!\s*important\s*$/i', '', $declaration)));
+                    $important = $hasPriority;
+                }
+            }
+
+            if ($display === 'none') {
+                $element -> parentNode ?-> removeChild($element);
+            }
         }
     }
 
@@ -538,9 +560,8 @@ class HTMLLoader {
      * <footer>/<aside> (reliable regardless of class naming, since they're
      * semantic HTML5 landmarks), plus anything classed/id'd like navigation,
      * a header/footer, a sidebar, a cookie banner, an ad slot, a popup/modal,
-     * etc. Best run right before extractBodyText() - same as
-     * removeStyleAndScriptTags(), this only matters for what fullText ends
-     * up containing, not for image/link discovery earlier in the crawl.
+     * etc. Run right before extractBodyText(), after image/link discovery
+     * has captured the links in otherwise visible page chrome.
      */
     public static function removeBoilerplateElements(\DOMDocument $document): void {
         foreach (['nav', 'header', 'footer', 'aside'] as $tagName) {

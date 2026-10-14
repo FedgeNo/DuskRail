@@ -8,7 +8,7 @@
 
     var PREVIEW_PLACEHOLDER = 'Select an image to preview it here.';
     var TARGET_ROW_HEIGHT = 180;
-    var GRID_GAP = 8;
+    var MAX_IMAGE_ASPECT_RATIO = 5;
 
     // Infinite-scroll state for the in-progress search - reset at the start
     // of every new search() call so a fresh query/type never appends onto a
@@ -20,13 +20,8 @@
     var loadingMore = false;
     var previewToken = 0;
 
-    // Every image tile currently on screen, as ImageTile instances, in the
-    // order they were loaded. Kept because the justified layout has to be
-    // recomputed from scratch whenever the container's width changes, and
-    // each tile's aspect ratio only exists here - it's a fact about the
-    // image, not something the DOM has any way to store or recover.
+    // Tiles remain in result order for preview selection across batches.
     var imageTiles = [];
-    var imageLayoutFrame = null;
 
     // The tile whose image is in the preview column, if any - kept here so
     // the arrow keys know where to move from and Escape knows what to clear.
@@ -134,12 +129,12 @@
     };
 
     /**
-     * Sizes this tile for a justified row of the given height. The width
-     * follows from the image's own aspect ratio, which is what makes every
-     * tile in a row share one height without any of them being cropped.
+     * Sizes the thumbnail without stretching it, bounded by its batch width.
      */
     ImageTile.prototype.resizeTo = function (height) {
-        var width = this.aspectRatio * height;
+        var containerWidth = this.element.parentElement.clientWidth;
+        var width = Math.min(this.aspectRatio * height, containerWidth);
+        height = width / this.aspectRatio;
 
         this.element.style.width = width + 'px';
 
@@ -397,70 +392,22 @@
             });
     }
 
-    /**
-     * Packs tiles into rows at a shared height, scaled by each image's own
-     * aspect ratio, then stretches every full row to exactly fill the
-     * container width - the classic Google Photos/Flickr "justified gallery"
-     * layout. A CSS grid can't do this because it doesn't know each image's
-     * aspect ratio; it can only carve up uniform cells. Rows are built as
-     * explicit wrapper elements rather than left to the browser's own
-     * flex-wrap point - letting flex-wrap decide left row boundaries at the
-     * mercy of subpixel rounding, which didn't reliably match the row groups
-     * this function actually computed widths for.
-     */
-    function layoutJustifiedGrid(containerEl, tiles) {
-        var containerWidth = containerEl.clientWidth;
-        var row = [];
-        var rowAspectSum = 0;
+    function sizeImageTile(tile) {
+        var img = tile.element.querySelector('img');
 
-        function placeRow(rowTiles, height) {
-            var rowEl = document.createElement('div');
-            rowEl.className = 'ImageGridRow';
+        if (img && img.naturalWidth && img.naturalHeight) {
+            tile.aspectRatio = img.naturalWidth / img.naturalHeight;
 
-            rowTiles.forEach(function (tile) {
-                tile.resizeTo(height);
-                rowEl.appendChild(tile.element);
-            });
-
-            containerEl.appendChild(rowEl);
-        }
-
-        tiles.forEach(function (tile) {
-            row.push(tile);
-            rowAspectSum += tile.aspectRatio;
-
-            var gapWidth = (row.length - 1) * GRID_GAP;
-            var rowWidthAtTargetHeight = rowAspectSum * TARGET_ROW_HEIGHT + gapWidth;
-
-            if (rowWidthAtTargetHeight >= containerWidth) {
-                var scale = (containerWidth - gapWidth) / (rowAspectSum * TARGET_ROW_HEIGHT);
-                placeRow(row, TARGET_ROW_HEIGHT * scale);
-                row = [];
-                rowAspectSum = 0;
+            if (tile.aspectRatio > MAX_IMAGE_ASPECT_RATIO || tile.aspectRatio < 1 / MAX_IMAGE_ASPECT_RATIO) {
+                tile.element.style.display = 'none';
+                imageTiles = imageTiles.filter(function (other) {
+                    return other !== tile;
+                });
+                return;
             }
-        });
-
-        if (row.length > 0) {
-            placeRow(row, TARGET_ROW_HEIGHT);
-        }
-    }
-
-    /**
-     * Re-flows every tile currently on screen. Row boundaries are computed
-     * against the container's width, so a window resize invalidates all of
-     * them at once - without this the grid keeps the rows it was built for
-     * and either overflows its column or leaves a growing empty margin.
-     * Every page is re-laid out as one run here, unlike the incremental
-     * append during scrolling, since there's no reason to preserve the old
-     * page boundaries once everything is being recomputed anyway.
-     */
-    function relayoutImageGrid() {
-        if (currentType !== 'image' || imageTiles.length === 0) {
-            return;
         }
 
-        clearElement(results);
-        layoutJustifiedGrid(results, imageTiles);
+        tile.resizeTo(TARGET_ROW_HEIGHT);
     }
 
     function updateStatus() {
@@ -551,8 +498,7 @@
                     preview.textContent = PREVIEW_PLACEHOLDER;
                 }
 
-                // Reserve space immediately; each actual thumbnail supplies
-                // its ratio as it loads, without a separate probing image.
+                // Each batch wraps independently; earlier batches keep their nodes.
                 var tiles = items.map(function (result) {
                     var tile = new ImageTile(result, 1);
                     tile.toDOM();
@@ -560,7 +506,13 @@
                 });
 
                 imageTiles = imageTiles.concat(tiles);
-                layoutJustifiedGrid(results, tiles);
+                var grid = document.createElement('div');
+                grid.setAttribute('class', 'ImageBatchGrid');
+                results.appendChild(grid);
+                tiles.forEach(function (tile) {
+                    grid.appendChild(tile.element);
+                    sizeImageTile(tile);
+                });
                 loadingMore = false;
                 maybeLoadMore();
             })
@@ -634,10 +586,7 @@
         submit();
     });
 
-    // Delegated on document rather than bound per tile - tiles are created
-    // and thrown away by the hundred as results page in and the grid
-    // re-flows, and one listener that outlives all of them is both cheaper
-    // and impossible to leave dangling on a detached element.
+    // Delegation covers tiles in every appended batch.
     document.addEventListener('click', function (event) {
         var element = event.target.closest('.ImageTile');
         var tile = element !== null ? tileFor(element) : null;
@@ -647,8 +596,7 @@
         }
     });
 
-    // Image load does not bubble; capture lets one listener handle every
-    // thumbnail. Coalesce cached-image bursts into one layout per frame.
+    // Capture handles thumbnail loads without rebuilding any batch.
     document.addEventListener('load', function (event) {
         if (event.target.tagName !== 'IMG') {
             return;
@@ -657,24 +605,8 @@
         var element = event.target.closest('.ImageTile');
         var tile = element !== null ? tileFor(element) : null;
 
-        if (tile === null || !event.target.naturalWidth || !event.target.naturalHeight) {
-            return;
-        }
-
-        var ratio = event.target.naturalWidth / event.target.naturalHeight;
-
-        if (ratio === tile.aspectRatio) {
-            return;
-        }
-
-        tile.aspectRatio = ratio;
-
-        if (imageLayoutFrame === null) {
-            imageLayoutFrame = window.requestAnimationFrame(function () {
-                imageLayoutFrame = null;
-                relayoutImageGrid();
-                maybeLoadMore();
-            });
+        if (tile !== null) {
+            sizeImageTile(tile);
         }
     }, true);
 
@@ -736,21 +668,6 @@
     });
 
     window.addEventListener('scroll', maybeLoadMore);
-
-    // Debounced: a drag-resize fires this continuously, and re-flowing the
-    // whole grid on every intermediate width is work whose result is thrown
-    // away a few milliseconds later.
-    var resizeTimer = null;
-    window.addEventListener('resize', function () {
-        if (resizeTimer !== null) {
-            clearTimeout(resizeTimer);
-        }
-
-        resizeTimer = setTimeout(function () {
-            resizeTimer = null;
-            relayoutImageGrid();
-        }, 150);
-    });
 
     if (input.value.trim() !== '') {
         search(input.value.trim());

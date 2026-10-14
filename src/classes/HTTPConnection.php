@@ -19,7 +19,7 @@ declare(strict_types=1);
  */
 class HTTPConnection {
     // Deliberately generous - a page can be extremely markup-heavy (nested
-    // divs, inline SVGs, huge inlined scripts before removeStyleAndScriptTags()
+    // divs, inline SVGs, huge inlined scripts before removeNonContentElements()
     // strips them) and still only contain a perfectly reasonable amount of
     // actual text. This is a backstop against truly extreme/malicious
     // responses, not a tight budget.

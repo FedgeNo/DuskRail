@@ -297,6 +297,11 @@ notably the application-specific `MANTICORE_USERNAME` and
 `MANTICORE_PASSWORD`, `WORKER_COUNT`, and `CHROME_BINARY`, which only needs
 setting if none of the auto-detected binary names match what's installed. A
 `WORKER_COUNT` change takes effect the next time the crawler manager starts.
+The optional integrations are off when left blank: `SOURCELEDGER_TOKEN`
+enables the SourceLedger API endpoints, and `BROWSER_OUTBOUND_IPS` rotates
+browser traffic across the host's own public addresses. Leave
+`CHROME_DISABLE_DEV_SHM_USAGE=0` unless `/dev/shm` is too small for Chrome
+(typically in a container).
 
 When upgrading an installation that already has crawled data, the installer
 resumes or runs the initial Manticore backfill automatically. It copies only

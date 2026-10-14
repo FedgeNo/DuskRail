@@ -17,8 +17,13 @@ class OutboundProxyProcess {
 
     public readonly string $hostAndPort;
 
-    public function __construct() {
-        $command = [PHP_BINARY, ROOT_DIR . '/bin/outbound-proxy.php', (string) getmypid()];
+    public function __construct(?string $source_address = null) {
+        $binary = PHP_SAPI === 'cli' ? PHP_BINARY : (Env::get('PHP_CLI_BINARY') ?: PHP_BINDIR . '/php');
+        $command = [$binary, ROOT_DIR . '/bin/outbound-proxy.php', (string) getmypid()];
+        if ($source_address !== null) {
+            BrowserEgress::addresses($source_address);
+            $command[] = $source_address;
+        }
         $descriptors = [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']];
         $process = proc_open($command, $descriptors, $pipes);
 

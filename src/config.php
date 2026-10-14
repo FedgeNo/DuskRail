@@ -21,6 +21,9 @@ return [
     // empty hash means "nobody can sign in", which is the only safe way for an
     // install that never configured one to fail.
     'authPasswordHash' => Env::get('AUTH_PASSWORD_HASH', ''),
+    // Shared server-to-server credential for SourceLedger's interactive
+    // retrieval seam. Empty means the seam is disabled.
+    'sourceLedgerToken' => Env::get('SOURCELEDGER_TOKEN', ''),
     // How many bin/crawler.php workers bin/crawler-manager.php runs at once.
     // Configuration rather than a constant in the manager because the
     // installer has to know it too - each slot needs its own writable
@@ -31,4 +34,9 @@ return [
     // google-chrome, chromium, google-chrome-stable on $PATH in that order).
     // Only needed if none of those names match what's installed.
     'chromeBinary' => Env::get('CHROME_BINARY', ''),
+    // Passes --disable-dev-shm-usage, moving Chrome's shared memory from
+    // /dev/shm to files in the temp directory. Only for a host whose /dev/shm
+    // is too small (containers): elsewhere it turns renderer traffic into
+    // continuous disk writes that stall everything sharing that disk.
+    'chromeDisableDevShmUsage' => Env::get('CHROME_DISABLE_DEV_SHM_USAGE', '0') === '1',
 ];
