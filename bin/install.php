@@ -1869,8 +1869,10 @@ SHELL;
 
 heading('Crawler service (run manually, needs sudo)');
 
-// Skip this unit where another supervisor already runs
-// bin/crawler-manager.php on its own schedule - never run both at once.
+// The manager runs all the time: it owns the shared browser and serves
+// interactive Retrieval API requests immediately. Ordinary crawling follows
+// it unless CRAWL_WINDOWED=1, where an external scheduler opens windows with
+// bin/crawl-window.php instead.
 echo <<<SHELL
 sudo tee /etc/systemd/system/duskrail-crawler.service > /dev/null <<'EOF'
 [Unit]
@@ -1891,7 +1893,12 @@ ExecStart={$php_binary} {$root}/bin/crawler-manager.php
 # alive after TimeoutStopSec is SIGKILLed as a backstop.
 KillMode=mixed
 TimeoutStopSec=120
-Restart=no
+Restart=always
+RestartSec=10
+# Crawling and browsing yield to anything else sharing the machine.
+Nice=10
+CPUWeight=20
+IOWeight=20
 # Keep a runaway browser or worker from crowding out the live site and its
 # database. Apply reclaim pressure before enforcing the absolute cgroup cap.
 MemoryHigh=6G
@@ -1925,10 +1932,10 @@ LimitNOFILE=524288
 WantedBy=multi-user.target
 EOF
 sudo systemctl daemon-reload
+sudo systemctl enable --now duskrail-crawler
 
-# Left disabled (no boot-start) and stopped on purpose - drive it by hand:
-#   sudo systemctl start duskrail-crawler
-#   sudo systemctl stop duskrail-crawler     # graceful: workers finish first
+# Stopping it is graceful - in-flight workers finish first:
+#   sudo systemctl stop duskrail-crawler
 
 SHELL;
 

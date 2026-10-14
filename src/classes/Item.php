@@ -214,7 +214,7 @@ INSERT INTO `Items` (`url`, `hostId`, `type`, `crawlPriority`, `crawledTime`, `c
     private static function selectCandidateRow(?string $topic): ?array {
         $connection = Database::connection();
 
-        if (Setting::value(INTERACTIVE_ONLY_SETTING) === '1') {
+        if (!CrawlWindow::ordinaryCrawlAllowed()) {
             $interactive = mysqli_query($connection, '
 SELECT `Items`.`itemId`, `Items`.`hostId`, `Items`.`crawlPriority`
     FROM `Items` FORCE INDEX (`crawlPriority_itemId`)

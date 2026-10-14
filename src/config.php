@@ -38,5 +38,8 @@ return [
     // /dev/shm to files in the temp directory. Only for a host whose /dev/shm
     // is too small (containers): elsewhere it turns renderer traffic into
     // continuous disk writes that stall everything sharing that disk.
+    // 1 confines ordinary crawling to windows opened by bin/crawl-window.php
+    // (an external scheduler's turns); interactive requests are always served.
+    'crawlWindowed' => Env::get('CRAWL_WINDOWED', '0') === '1',
     'chromeDisableDevShmUsage' => Env::get('CHROME_DISABLE_DEV_SHM_USAGE', '0') === '1',
 ];

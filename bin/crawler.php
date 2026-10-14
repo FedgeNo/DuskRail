@@ -64,7 +64,7 @@ function hostFor(URL $url, string $chromeEndpoint, bool $realtime): ?Host {
     }
 
     if ($host -> fetchRobotsTxtIfStale($url -> scheme, $chromeEndpoint, $realtime)
-        && Setting::value(INTERACTIVE_ONLY_SETTING) !== '1'
+        && CrawlWindow::ordinaryCrawlAllowed()
         && $host -> robotsTxt !== null && $host -> robotsTxt !== '') {
         $queued = Sitemap::ingestFor($host, $host -> robotsTxt);
 
@@ -194,9 +194,8 @@ if ($item === null) {
     // finished" and wrongly reset that item's hang counter (which, for an
     // item that reliably hangs while it's the only thing left in the queue,
     // would stop it ever reaching the 3-strikes deletion).
+    // Silent: the always-running manager polls an empty queue every second.
     file_put_contents($currentItemFile, '');
-    echo 'Nothing to crawl.
-';
     exit(0);
 }
 

@@ -33,6 +33,10 @@ define('CRAWL_TOPIC_SETTING', 'crawlTopic');
 // Restrict queue selection to active interactive Retrieval API requests.
 define('INTERACTIVE_ONLY_SETTING', 'interactiveOnly');
 
+// Unix time until which ordinary crawling is allowed when CRAWL_WINDOWED=1
+// (Setting, extended by bin/crawl-window.php; see CrawlWindow).
+define('ORDINARY_CRAWL_UNTIL_SETTING', 'ordinaryCrawlUntil');
+
 // When bin/crawler-manager.php last confirmed it was alive (Setting, a unix
 // timestamp refreshed every few seconds while it runs) - how the watch page
 // can say "the crawler is running" without any way to see the process.

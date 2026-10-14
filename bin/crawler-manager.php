@@ -66,6 +66,14 @@ const MAX_CHROME_AGE_SECONDS = 3600.0;
 // it back-to-back as fast as the loop spins, rather than backing off.
 const CHROME_RETRY_COOLDOWN_SECONDS = 5.0;
 
+// How long every free slot waits after a run that found nothing to crawl -
+// one empty pick means the others would find nothing either. The manager runs
+// all the time to serve interactive requests, and outside a crawl window (see
+// CrawlWindow) most runs find nothing; without this pause every free slot
+// would start a fresh PHP process ten times a second. Also the most an
+// interactive request waits for a free slot to notice it.
+const IDLE_RETRY_SECONDS = 1.0;
+
 // How often the heartbeat Setting is refreshed. Comfortably under the
 // staleness threshold the watch page uses, comfortably over the loop's own
 // tick so this isn't a database write 10 times a second.
@@ -259,6 +267,7 @@ function flush_buffer(int $slot, string &$buffer, $target): void {
 
 $hangCounts = [];
 $workers = array_fill(0, WORKER_COUNT, null);
+$idleUntil = 0.0;
 
 echo 'Crawler manager starting ' . WORKER_COUNT . ' worker(s). Press Ctrl+C to stop.
 ';
@@ -322,7 +331,7 @@ while (true) {
     }
 
     foreach ($workers as $slot => $worker) {
-        if ($worker === null && !$shuttingDown) {
+        if ($worker === null && !$shuttingDown && microtime(true) >= $idleUntil) {
             if (!ensure_current_chrome_generation($chromeInstances, $chromeGeneration, $lastChromeAttemptAt, $outboundProxy)) {
                 continue;
             }
@@ -423,6 +432,8 @@ while (true) {
 
             if ($finishedItemId > 0) {
                 unset($hangCounts[$finishedItemId]);
+            } else {
+                $idleUntil = microtime(true) + IDLE_RETRY_SECONDS;
             }
         }
 

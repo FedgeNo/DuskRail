@@ -16,7 +16,7 @@ not fetched until ordinary crawling is enabled again. Stored content and
 unrelated settings are preserved.
 
 Existing workers may finish their current request when the setting changes.
-Restart `duskrail-crawler.service` to drain the old workers and start fresh ones.
+Each worker reads the setting when it picks an item, so no restart is needed.
 
 From the project root, enable with:
 
@@ -25,3 +25,13 @@ php -r 'require "init.php"; Setting::store(INTERACTIVE_ONLY_SETTING, "1");'
 ```
 
 Use `"0"` instead of `"1"` to disable the restriction.
+
+## Crawl windows
+
+`CRAWL_WINDOWED=1` in `.env` applies the same restriction automatically
+outside crawl windows: ordinary crawling, recrawls and sitemap ingestion run
+only while `bin/crawl-window.php` holds a window open, and interactive
+requests are served at all times. The window is renewed in
+`CrawlWindow::LEASE_SECONDS` leases, so it closes within a minute if its
+holder is killed. Setting `interactiveOnly` to `1` still overrides an open
+window.

@@ -323,13 +323,24 @@ per-slot output. Ctrl+C shuts it down gracefully: no new workers get spawned,
 in-flight ones are left to finish their current item on their own, and only
 then does it shut down the Chrome instance — nothing gets killed mid-crawl.
 
-In normal operation it runs as a systemd service under its own account
-instead, with the same graceful shutdown:
+In normal operation it runs all the time as a systemd service under its own
+account instead, with the same graceful shutdown. Keeping it running keeps the
+shared browser available, so Retrieval API searches and interactive page
+requests are served immediately:
 
 ```sh
-sudo systemctl start duskrail-crawler
+sudo systemctl enable --now duskrail-crawler
 sudo systemctl stop duskrail-crawler     # workers finish their current item
 sudo journalctl -u duskrail-crawler -f
+```
+
+To let an external scheduler decide when ordinary crawling happens, set
+`CRAWL_WINDOWED=1`. Ordinary crawling then runs only while a window is open,
+and interactive requests are still served at any time:
+
+```sh
+php bin/crawl-window.php 600   # crawl for ten minutes
+php bin/crawl-window.php       # crawl until stopped with SIGTERM or Ctrl+C
 ```
 
 `WORKER_COUNT` (in `.env`) trades off crawl throughput against how many
